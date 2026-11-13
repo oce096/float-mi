@@ -1180,16 +1180,21 @@ export function loadUserIdentities(): UserIdentity[] {
 export function saveUserIdentities(identities: UserIdentity[]): void {
     if (typeof window === "undefined") return;
     kvSet(USER_IDENTITIES_KEY, JSON.stringify(identities));
+    window.dispatchEvent(new CustomEvent("settings-identities-updated"));
 }
 
 /**
  * Resolve user identity through the binding cascade:
- *   global defaults → character defaults → app overrides.
+ *   session override → app overrides → character defaults → global defaults.
  * Falls back to first identity if binding has no userIdentityId set.
  */
-export function resolveUserIdentity(characterId?: string, appId?: string): UserIdentity | null {
+export function resolveUserIdentity(characterId?: string, appId?: string, sessionUserIdentityId?: string): UserIdentity | null {
     const identities = loadUserIdentities();
     if (identities.length === 0) return null;
+    if (sessionUserIdentityId) {
+        const direct = identities.find(i => i.id === sessionUserIdentityId);
+        if (direct) return direct;
+    }
     const config = loadBindingConfig();
     const resolved = resolveBinding(config, characterId, appId);
     if (resolved.userIdentityId) {

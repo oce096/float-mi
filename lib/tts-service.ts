@@ -43,6 +43,10 @@ export async function synthesizeSpeech(
         return synthesizeOpenAI(text, voiceConfig);
     }
 
+    if (provider === "ElevenLabs") {
+        return synthesizeElevenLabs(text, voiceConfig);
+    }
+
     return null;
 }
 
@@ -168,6 +172,51 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
     if (!response.ok) {
         const errText = await response.text().catch(() => "");
         throw new Error(`OpenAI TTS 请求失败 (${response.status}): ${errText}`);
+    }
+
+    const blob = await response.blob();
+    return new Blob([await blob.arrayBuffer()], { type: "audio/mpeg" });
+}
+
+// ── ElevenLabs TTS ──────────────────────────────────
+
+async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+    if (!config.apiKey) throw new Error("ElevenLabs API Key 未配置");
+    const voiceId = (config.defaultVoice || "21m00Tcm4TlvDq8ikWAM").trim();
+    if (!voiceId) throw new Error("ElevenLabs Voice ID 未配置");
+
+    const baseUrl = (config.baseUrl || "https://api.elevenlabs.io/v1").replace(/\/$/, "");
+    const stability = typeof config.elevenStability === "number" && Number.isFinite(config.elevenStability)
+        ? Math.min(1, Math.max(0, config.elevenStability))
+        : 0.5;
+    const similarityBoost = typeof config.elevenSimilarity === "number" && Number.isFinite(config.elevenSimilarity)
+        ? Math.min(1, Math.max(0, config.elevenSimilarity))
+        : 0.75;
+    const speed = typeof config.speechSpeed === "number" && Number.isFinite(config.speechSpeed)
+        ? Math.min(1.2, Math.max(0.7, config.speechSpeed))
+        : 1.0;
+
+    const response = await fetchWithTimeout(`${baseUrl}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+        method: "POST",
+        headers: {
+            "xi-api-key": config.apiKey.trim(),
+            "Content-Type": "application/json",
+            Accept: "audio/mpeg",
+        },
+        body: JSON.stringify({
+            text,
+            model_id: config.model || "eleven_multilingual_v2",
+            voice_settings: {
+                stability,
+                similarity_boost: similarityBoost,
+                speed,
+            },
+        }),
+    });
+
+    if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        throw new Error(`ElevenLabs TTS 请求失败 (${response.status}): ${errText.slice(0, 300)}`);
     }
 
     const blob = await response.blob();

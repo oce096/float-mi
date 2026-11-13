@@ -38,13 +38,14 @@ import { triggerDeleteFriendReaction } from "@/lib/friend-request-engine";
 import { loadCharacters } from "@/lib/character-storage";
 import { isAgentComputerConfigured } from "@/lib/agent-computer";
 import { CharacterComputerPage } from "./character-computer-page";
-import { resolveUserIdentity, loadBindingConfig, loadPresets, resolveBinding } from "@/lib/settings-storage";
+import { resolveUserIdentity, loadBindingConfig, saveBindingConfig, getCharacterBinding, setCharacterBinding, loadUserIdentities, loadPresets, resolveBinding } from "@/lib/settings-storage";
+import { getUserIdentityDisplayName, type UserIdentity } from "@/components/settings/user-identity";
 import { getStatusRegionConfig, saveStatusRegionConfig, presetSupportsStatusRegion, isCustomStatusRegionActive, STATUS_REGION_SCHEME_TARGET, STATUS_REGION_UPDATED_EVENT, type StatusRegionConfig } from "@/lib/chat-status-region";
 import { downloadFile } from "@/lib/download-utils";
 import { getSchemes, saveScheme, deleteScheme, type CSSScheme } from "@/lib/css-scheme-storage";
 import { CustomStatusFrame } from "@/components/chat/custom-status-frame";
 import { KeyboardAutoSendDebounceItem } from "@/components/chat/keyboard-auto-send-debounce-item";
-import { ChevronRight, Image as ImageIcon, Video, Mic, UserMinus, UserPlus, Users, Pin, MessageSquare, Search, AlertCircle, Code, Laptop, Trash2, Smile, Sparkles, X, Play, Upload, Download, Save, FolderOpen, type LucideIcon } from "lucide-react";
+import { ChevronRight, Image as ImageIcon, Video, Mic, User, UserMinus, UserPlus, Users, Pin, MessageSquare, Search, AlertCircle, Code, Laptop, Trash2, Smile, Sparkles, X, Check, Play, Upload, Download, Save, FolderOpen, type LucideIcon } from "lucide-react";
 import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";
 import CSSSchemeBar from "@/components/ui/css-scheme-picker";
 import { ConfirmDialog } from "@/components/ui/modal";
@@ -524,7 +525,51 @@ export function ChatSettingsPanel({
     const groupChars = session.isGroup
         ? (session.participantIds || []).map(id => characters.find(c => c.id === id)).filter(Boolean)
         : [];
-    const userIdentity = resolveUserIdentity(undefined, session.isGroup ? "group_chat" : "chat");
+    const [identityRevision, setIdentityRevision] = useState(0);
+    const [showIdentityPicker, setShowIdentityPicker] = useState(false);
+    useEffect(() => {
+        const sync = () => setIdentityRevision(v => v + 1);
+        window.addEventListener("settings-bindings-updated", sync);
+        window.addEventListener("settings-identities-updated", sync);
+        return () => {
+            window.removeEventListener("settings-bindings-updated", sync);
+            window.removeEventListener("settings-identities-updated", sync);
+        };
+    }, []);
+    const allIdentities = useMemo(() => loadUserIdentities(), [identityRevision]);
+    const userIdentity = useMemo(
+        () => resolveUserIdentity(session.isGroup ? session.participantIds?.[0] : session.contactId, session.isGroup ? "group_chat" : "chat", session.userIdentityId),
+        [identityRevision, session.isGroup, session.participantIds, session.contactId, session.userIdentityId],
+    );
+    const explicitSessionIdentityId = useMemo(() => {
+        if (session.userIdentityId) return session.userIdentityId;
+        if (!session.isGroup) {
+            const cfg = loadBindingConfig();
+            const cb = getCharacterBinding(cfg, session.contactId);
+            return cb.appOverrides.chat?.userIdentityId || cb.defaults.userIdentityId || undefined;
+        }
+        return undefined;
+    }, [identityRevision, session.isGroup, session.contactId, session.userIdentityId]);
+    const selectSessionIdentity = (identityId: string | undefined) => {
+        if (session.isGroup) {
+            updateSession({ userIdentityId: identityId });
+            window.dispatchEvent(new CustomEvent("settings-bindings-updated"));
+        } else {
+            const cfg = loadBindingConfig();
+            const cb = getCharacterBinding(cfg, session.contactId);
+            const newDefaults = { ...cb.defaults, userIdentityId: identityId || undefined };
+            const newOverrides = { ...cb.appOverrides };
+            if (newOverrides.chat?.userIdentityId) {
+                newOverrides.chat = { ...newOverrides.chat, userIdentityId: identityId || undefined };
+            }
+            saveBindingConfig(setCharacterBinding(cfg, { ...cb, defaults: newDefaults, appOverrides: newOverrides }));
+            if (session.userIdentityId) {
+                updateSession({ userIdentityId: undefined });
+            }
+        }
+        setIdentityRevision(v => v + 1);
+        setShowIdentityPicker(false);
+    };
 
     // ── Group member management ──
     const [, setRosterVersion] = useState(0); // bump to re-render after admin actions
@@ -835,6 +880,19 @@ export function ChatSettingsPanel({
                         <div className="menu-label-group"><span className="menu-label">{session.isGroup ? "群聊名称" : "设置备注"}</span></div>
                         <div className="menu-right">
                             <span className="menu-desc mr-1">{session.isGroup ? (groupName || "未设置") : (alias || "无备注")}</span>
+                            <ChevronRight size={16} />
+                        </div>
+                    </button>
+                    <button className="menu-item" onClick={() => { setIdentityRevision(v => v + 1); setShowIdentityPicker(true); }}>
+                        <ChatInfoIcon icon={User} color={BINDING_ACCENTS.identity} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">当前面具（用户身份）</span>
+                            <span className="menu-desc">
+                                {explicitSessionIdentityId ? "已单独绑定面具" : "跟随全局默认面具"}
+                            </span>
+                        </div>
+                        <div className="menu-right">
+                            <span className="menu-desc mr-1">{getUserIdentityDisplayName(userIdentity, "默认身份")}</span>
                             <ChevronRight size={16} />
                         </div>
                     </button>
@@ -1372,6 +1430,58 @@ export function ChatSettingsPanel({
                             </div>
                         )}
                         <button className="ui-btn ui-btn-ghost w-full" onClick={() => setShowInvitePicker(false)}>取消</button>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal: User Identity (Mask) Picker */}
+            {showIdentityPicker && (
+                <div className="modal-overlay" onClick={() => setShowIdentityPicker(false)}>
+                    <div className="modal-dialog" onClick={e => e.stopPropagation()}>
+                        <span className="modal-header-title">{session.isGroup ? "切换本群面具" : `切换与 ${characterName} 的面具`}</span>
+                        <div className="flex flex-col gap-1.5 w-full max-h-[52vh] overflow-y-auto">
+                            <button
+                                type="button"
+                                className="chat-contact-item justify-between px-3 py-2.5 rounded-xl"
+                                style={{ background: !explicitSessionIdentityId ? "color-mix(in srgb, var(--c-text) 8%, transparent)" : undefined }}
+                                onClick={() => selectSessionIdentity(undefined)}
+                            >
+                                <div className="flex flex-col items-start min-w-0 flex-1 text-left">
+                                    <span className="ts-14 font-medium text-[var(--c-text-title)]">跟随全局默认</span>
+                                    <span className="ts-11 text-[var(--c-icon)] truncate w-full">
+                                        当前全局：{getUserIdentityDisplayName(resolveUserIdentity(), "未设置")}
+                                    </span>
+                                </div>
+                                {!explicitSessionIdentityId && <Check size={16} className="text-[var(--c-text-title)] shrink-0" />}
+                            </button>
+                            {allIdentities.map((item: UserIdentity) => {
+                                const selected = explicitSessionIdentityId === item.id;
+                                const displayName = getUserIdentityDisplayName(item);
+                                return (
+                                    <button
+                                        key={item.id}
+                                        type="button"
+                                        className="chat-contact-item justify-between px-3 py-2.5 rounded-xl"
+                                        style={{ background: selected ? "color-mix(in srgb, var(--c-text) 8%, transparent)" : undefined }}
+                                        onClick={() => selectSessionIdentity(item.id)}
+                                    >
+                                        <div className="flex items-center gap-2.5 min-w-0 flex-1 text-left">
+                                            <div className="w-8 h-8 rounded-full overflow-hidden bg-[var(--c-input)] shrink-0 flex items-center justify-center">
+                                                {item.avatarUrl ? <img src={item.avatarUrl} alt="" className="w-full h-full object-cover" /> : <User size={15} />}
+                                            </div>
+                                            <div className="flex flex-col min-w-0 flex-1">
+                                                <span className="ts-14 font-medium text-[var(--c-text-title)] truncate">{displayName}</span>
+                                                <span className="ts-11 text-[var(--c-icon)] truncate">
+                                                    {item.remark?.trim() ? `姓名：${item.name} · ` : ""}{item.occupation || item.bio || item.gender || "无简介"}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        {selected && <Check size={16} className="text-[var(--c-text-title)] shrink-0" />}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <button className="ui-btn ui-btn-ghost w-full" onClick={() => setShowIdentityPicker(false)}>关闭</button>
                     </div>
                 </div>
             )}

@@ -7,9 +7,12 @@ import {
     saveFollowUpConfig,
     getDefaultFollowUpConfig,
     resolveUserIdentity,
+    loadUserIdentities,
+    loadBindingConfig,
+    saveBindingConfig,
 } from "@/lib/settings-storage";
-import { loadChatAppSettings, saveChatAppSettings } from "@/lib/chat-storage";
-import type { UserIdentity } from "@/components/settings/user-identity";
+import { CHAT_APP_SETTINGS_UPDATED_EVENT, loadChatAppSettings, saveChatAppSettings } from "@/lib/chat-storage";
+import { getUserIdentityDisplayName, type UserIdentity } from "@/components/settings/user-identity";
 import { getApiLogs, clearApiLogs, type DebugInfo } from "@/lib/chat-engine";
 import type { FollowUpConfig } from "@/lib/settings-storage";
 import { PageShell } from "@/components/ui/page-shell";
@@ -157,6 +160,9 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
     const [showMomentsSettings, setShowMomentsSettings] = useState(false);
     const [showWalletPanel, setShowWalletPanel] = useState(false);
     const [identity, setIdentity] = useState<UserIdentity | null>(null);
+    const [allIdentities, setAllIdentities] = useState<UserIdentity[]>([]);
+    const [showIdentityPicker, setShowIdentityPicker] = useState(false);
+    const [filterByCurrentIdentity, setFilterByCurrentIdentity] = useState(true);
     const [notifEnabled, setNotifEnabled] = useState(false);
     const [notifHint, setNotifHint] = useState<string | null>(null);
     const [notifChecking, setNotifChecking] = useState(false);
@@ -173,8 +179,15 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
     });
 
     useEffect(() => {
-        setIdentity(resolveUserIdentity());
+        const syncIdentity = () => {
+            setIdentity(resolveUserIdentity());
+            setAllIdentities(loadUserIdentities());
+        };
+        syncIdentity();
+        window.addEventListener("settings-bindings-updated", syncIdentity);
+        window.addEventListener("settings-identities-updated", syncIdentity);
         const settings = loadChatAppSettings();
+        setFilterByCurrentIdentity(settings.filterByCurrentIdentity !== false);
         const browserGranted = isBrowserNotificationGranted();
         setNotifEnabled(settings.browserNotificationsEnabled === true && browserGranted);
         setEnterToSendEnabled(settings.enterToSendEnabled === true);
@@ -249,6 +262,21 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
     const handleCallVibrationToggle = (enabled: boolean) => {
         setCallVibrationEnabled(enabled);
         saveChatAppSettings({ ...loadChatAppSettings(), callVibrationEnabled: enabled });
+    };
+
+    const handleSelectGlobalIdentity = (identityId: string) => {
+        const cfg = loadBindingConfig();
+        saveBindingConfig({
+            ...cfg,
+            globalDefaults: { ...cfg.globalDefaults, userIdentityId: identityId },
+        });
+        setIdentity(resolveUserIdentity());
+        setShowIdentityPicker(false);
+    };
+
+    const handleFilterByIdentityToggle = (enabled: boolean) => {
+        setFilterByCurrentIdentity(enabled);
+        saveChatAppSettings({ ...loadChatAppSettings(), filterByCurrentIdentity: enabled });
     };
 
     if (showFollowUpEditor) {
@@ -338,13 +366,22 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
 
                         {/* Info & Stats */}
                         <div className="flex flex-col flex-1 justify-center gap-2">
-                            {/* Top Row: Name and Identity Badge */}
-                            <div className="flex items-center justify-between w-full mb-0.5">
-                                <div className="ts-22 font-bold text-[var(--c-text-title)] leading-none truncate">{identity?.name || "未设置身份"}</div>
-                                <div className="flex items-center gap-1.5 ts-11 font-medium bg-black/5 dark:bg-white/10 px-2 py-0.5 rounded-full shrink-0 text-[var(--c-text)] opacity-80">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block" />
-                                    手机在线
+                            {/* Top Row: Name and Identity Switcher */}
+                            <div className="flex items-center justify-between w-full mb-0.5 gap-2">
+                                <div className="min-w-0 flex flex-col">
+                                    <div className="ts-22 font-bold text-[var(--c-text-title)] leading-none truncate">{getUserIdentityDisplayName(identity, "未设置身份")}</div>
+                                    {identity?.remark?.trim() && identity?.name?.trim() && (
+                                        <span className="ts-11 text-[var(--c-icon)] mt-1 truncate">姓名：{identity.name}</span>
+                                    )}
                                 </div>
+                                <button
+                                    type="button"
+                                    onClick={() => { setAllIdentities(loadUserIdentities()); setShowIdentityPicker(true); }}
+                                    className="flex items-center gap-1.5 ts-11 font-semibold bg-black text-white px-2.5 py-1 rounded-full shrink-0 active:scale-95 transition-all"
+                                >
+                                    <User size={12} />
+                                    切换面具
+                                </button>
                             </div>
 
                             {/* Data Stats inline */}
@@ -479,6 +516,45 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
                         </button>
                     </div>
                 </div>
+                {showIdentityPicker && (
+                    <div className="modal-overlay" onClick={() => setShowIdentityPicker(false)}>
+                        <div className="modal-dialog" onClick={e => e.stopPropagation()}>
+                            <span className="modal-header-title">切换当前 User 面具</span>
+                            <div className="flex flex-col gap-1.5 w-full max-h-[50vh] overflow-y-auto">
+                                {allIdentities.map(item => {
+                                    const selected = identity?.id === item.id;
+                                    return (
+                                        <button
+                                            key={item.id}
+                                            type="button"
+                                            onClick={() => handleSelectGlobalIdentity(item.id)}
+                                            className="chat-contact-item justify-between px-3 py-2.5 rounded-xl"
+                                            style={{ background: selected ? "color-mix(in srgb, var(--c-text) 8%, transparent)" : undefined }}
+                                        >
+                                            <div className="flex items-center gap-2.5 min-w-0 flex-1 text-left">
+                                                <div className="w-8 h-8 rounded-full overflow-hidden bg-[var(--c-input)] shrink-0 flex items-center justify-center">
+                                                    {item.avatarUrl ? <img src={item.avatarUrl} alt="" className="w-full h-full object-cover" /> : <User size={15} />}
+                                                </div>
+                                                <div className="flex flex-col min-w-0 flex-1">
+                                                    <span className="ts-14 font-medium text-[var(--c-text-title)] truncate">{getUserIdentityDisplayName(item)}</span>
+                                                    <span className="ts-11 text-[var(--c-icon)] truncate">
+                                                        {item.remark?.trim() ? `姓名：${item.name} · ` : ""}{item.occupation || item.bio || item.gender || "无简介"}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            {selected && <span className="ts-12 font-bold text-[var(--c-text-title)]">当前</span>}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <div className="flex items-center justify-between w-full pt-2 border-t border-[var(--c-border)]">
+                                <span className="ts-12 text-[var(--c-text)]">只显示绑定了该面具的角色与群聊</span>
+                                <Toggle checked={filterByCurrentIdentity} onChange={handleFilterByIdentityToggle} />
+                            </div>
+                            <button className="ui-btn ui-btn-ghost w-full" onClick={() => setShowIdentityPicker(false)}>关闭</button>
+                        </div>
+                    </div>
+                )}
             </PageShell>
         </>
     );

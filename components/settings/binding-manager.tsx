@@ -59,9 +59,10 @@ import {
     ensureSettingsStorageHydrated,
 } from "@/lib/settings-storage";
 import { hydrateKvDb } from "@/lib/kv-db";
-import type { UserIdentity } from "@/components/settings/user-identity";
+import { getUserIdentityDisplayName, type UserIdentity } from "@/components/settings/user-identity";
 import { loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
+import { loadCharacterWorldGroups, type CharacterWorldGroup } from "@/lib/character-world-storage";
 
 type Level = "global" | "character" | "app";
 type SingleBindingField = "apiConfigId" | "voiceConfigId" | "presetId" | "userIdentityId";
@@ -123,6 +124,8 @@ export function BindingManager() {
     const [activeSlotSheetField, setActiveSlotSheetField] = useState<BindingField | null>(null);
     const [activeAuxSheetField, setActiveAuxSheetField] = useState<AuxBindingField | null>(null);
     const [showCharacterPicker, setShowCharacterPicker] = useState(false);
+    const [worldGroups, setWorldGroups] = useState<CharacterWorldGroup[]>([]);
+    const [selectedWorldGroupId, setSelectedWorldGroupId] = useState<string>("all");
     const [isLoaded, setIsLoaded] = useState(false);
 
     const reloadData = () => {
@@ -132,6 +135,7 @@ export function BindingManager() {
         setWorldBooks(loadWorldBooks());
         setRegexes(loadRegexes());
         setIdentities(loadUserIdentities());
+        setWorldGroups(loadCharacterWorldGroups());
     };
 
     useEffect(() => {
@@ -471,7 +475,7 @@ export function BindingManager() {
             case "presetId":
                 return presets.map(p => ({ id: p.id, name: p.name }));
             case "userIdentityId":
-                return identities.map(i => ({ id: i.id, name: i.name }));
+                return identities.map(i => ({ id: i.id, name: getUserIdentityDisplayName(i) }));
             case "worldBookIds":
                 return worldBooks.map(w => ({ id: w.id, name: w.name }));
             case "regexIds":
@@ -914,6 +918,20 @@ export function BindingManager() {
 
     const renderCharacterPickerDialog = () => {
         if (!showCharacterPicker) return null;
+        const charById = new Map(characters.map(c => [c.id, c]));
+        const charWorldNameMap = new Map<string, string>();
+        for (const wg of worldGroups) {
+            for (const memberId of wg.memberIds) {
+                charWorldNameMap.set(memberId, wg.name);
+            }
+        }
+        const activeGroup = selectedWorldGroupId === "all"
+            ? null
+            : worldGroups.find(g => g.id === selectedWorldGroupId) || null;
+        const displayedGroups = activeGroup
+            ? [activeGroup]
+            : (worldGroups.length > 0 ? worldGroups : [{ id: "all", name: "全部角色", description: "", memberIds: characters.map(c => c.id), relations: [], createdAt: "", updatedAt: "" }]);
+
         return (
             <div className="modal-overlay" data-ui="modal" onClick={() => setShowCharacterPicker(false)}>
                 <div
@@ -927,32 +945,76 @@ export function BindingManager() {
                     {characters.length === 0 ? (
                         <span className="menu-desc">暂无角色，请先在角色库中创建角色。</span>
                     ) : (
-                        <div className="chat-contact-list">
-                            {characters.map(char => {
-                                const configured = hasCharacterBinding(char.id);
-                                const name = char.name || "未命名角色";
-                                return (
+                        <>
+                            {worldGroups.length > 1 && (
+                                <div className="flex items-center gap-1.5 overflow-x-auto hide-scrollbar w-full pb-1">
                                     <button
-                                        key={char.id}
                                         type="button"
-                                        className="chat-contact-item binding-contact-item"
-                                        onClick={() => openCharacterBinding(char.id)}
+                                        onClick={() => setSelectedWorldGroupId("all")}
+                                        className={`px-3 py-1 rounded-full ts-12 font-medium shrink-0 transition-all ${selectedWorldGroupId === "all" ? "bg-black text-white" : "bg-[var(--c-input)] text-[var(--c-text)] opacity-80"}`}
                                     >
-                                        <span className="chat-contact-avatar">
-                                            {char.avatar ? (
-                                                <img src={char.avatar} alt="" />
-                                            ) : (
-                                                <span className="chat-contact-avatar-fallback">
-                                                    {name.charAt(0)}
-                                                </span>
-                                            )}
-                                        </span>
-                                        <span className="chat-contact-name">{name}</span>
-                                        {configured && <span className="binding-contact-badge" aria-label="已配置" />}
+                                        全部 ({characters.length})
                                     </button>
-                                );
-                            })}
-                        </div>
+                                    {worldGroups.map(wg => (
+                                        <button
+                                            key={wg.id}
+                                            type="button"
+                                            onClick={() => setSelectedWorldGroupId(wg.id)}
+                                            className={`px-3 py-1 rounded-full ts-12 font-medium shrink-0 transition-all ${selectedWorldGroupId === wg.id ? "bg-black text-white" : "bg-[var(--c-input)] text-[var(--c-text)] opacity-80"}`}
+                                        >
+                                            {wg.name} ({wg.memberIds.length})
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            <div className="chat-contact-list">
+                                {displayedGroups.map(group => {
+                                    const groupChars = group.memberIds
+                                        .map(id => charById.get(id))
+                                        .filter((c): c is Character => Boolean(c));
+                                    if (groupChars.length === 0) return null;
+                                    return (
+                                        <div key={group.id} className="flex flex-col gap-1 w-full">
+                                            {worldGroups.length > 1 && selectedWorldGroupId === "all" && (
+                                                <div className="px-2 pt-2 pb-0.5 ts-11 font-semibold text-[var(--c-icon)]">
+                                                    {group.name} · {groupChars.length}
+                                                </div>
+                                            )}
+                                            {groupChars.map(char => {
+                                                const configured = hasCharacterBinding(char.id);
+                                                const name = char.name || "未命名角色";
+                                                const worldLabel = charWorldNameMap.get(char.id);
+                                                return (
+                                                    <button
+                                                        key={char.id}
+                                                        type="button"
+                                                        className="chat-contact-item binding-contact-item"
+                                                        onClick={() => openCharacterBinding(char.id)}
+                                                    >
+                                                        <span className="chat-contact-avatar">
+                                                            {char.avatar ? (
+                                                                <img src={char.avatar} alt="" />
+                                                            ) : (
+                                                                <span className="chat-contact-avatar-fallback">
+                                                                    {name.charAt(0)}
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                        <span className="flex flex-col items-start min-w-0 flex-1 text-left">
+                                                            <span className="chat-contact-name truncate w-full">{name}</span>
+                                                            {worldLabel && (
+                                                                <span className="ts-11 text-[var(--c-icon)] truncate w-full">{worldLabel}</span>
+                                                            )}
+                                                        </span>
+                                                        {configured && <span className="binding-contact-badge" aria-label="已配置" />}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </>
                     )}
                 </div>
             </div>
@@ -969,7 +1031,11 @@ export function BindingManager() {
                             <p className="settings-menu-section-title min-w-0">Global Defaults</p>
                             <button
                                 type="button"
-                                onClick={() => setShowCharacterPicker(true)}
+                                onClick={() => {
+                                    reloadData();
+                                    setCharacters(loadCharacters());
+                                    setShowCharacterPicker(true);
+                                }}
                                 className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[18px] bg-black px-3 text-[calc(11px*var(--app-text-scale,1))] font-bold text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md active:scale-95 focus:outline-none"
                             >
                                 <UserPlus size={14} strokeWidth={1.8} />

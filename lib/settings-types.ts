@@ -167,10 +167,14 @@ export type VoiceApiConfig = {
     sttModel?: string;
     defaultVoice: string;
     languageBoost?: string;
-    /** Minimax voice_setting.speed. Missing values keep the legacy 1.0x behavior. */
+    /** Minimax / ElevenLabs 语速，缺省保持旧行为（1.0x）。 */
     speechSpeed?: number;
     /** Minimax voice_setting.pitch（半音，±12）。缺省保持旧行为（0，原声）。 */
     speechPitch?: number;
+    /** ElevenLabs voice_settings.stability（0..1，默认 0.5）。 */
+    elevenStability?: number;
+    /** ElevenLabs voice_settings.similarity_boost（0..1，默认 0.75）。 */
+    elevenSimilarity?: number;
     customVoices?: { id: string; name: string; createdAt?: number }[];
     enableSTT: boolean;
     enableTTS: boolean;

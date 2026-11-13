@@ -10,6 +10,8 @@ import { ConfirmDialog } from "@/components/ui/modal";
 export type UserIdentity = {
     id: string;
     name: string;
+    /** 备注：角色绑定或切换面具时优先显示备注，没有备注再显示全名 */
+    remark?: string;
     avatarUrl?: string;
     bio: string;
     gender: string;
@@ -17,6 +19,15 @@ export type UserIdentity = {
     occupation: string;
     customSettings: string;
 };
+
+/** 优先显示面具备注，无备注则回退显示名字 */
+export function getUserIdentityDisplayName(identity?: Pick<UserIdentity, "name" | "remark"> | null, fallback = "未命名身份"): string {
+    if (!identity) return fallback;
+    const remark = identity.remark?.trim();
+    if (remark) return remark;
+    const name = identity.name?.trim();
+    return name || fallback;
+}
 
 const DEFAULT_IDENTITIES: UserIdentity[] = [
     {
@@ -164,7 +175,10 @@ export function UserIdentitySettings() {
                             }}
                         >
                             <div className="min-w-0 flex flex-col gap-1">
-                                <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{identity.name || "未命名身份"}</span>
+                                <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{getUserIdentityDisplayName(identity)}</span>
+                                {identity.remark?.trim() && identity.name?.trim() && (
+                                    <span className="menu-desc truncate">姓名：{identity.name}</span>
+                                )}
                                 <span className="menu-desc truncate">{identity.occupation || identity.bio || identity.gender || "未填写身份信息"}</span>
                             </div>
                             <div className="flex items-end justify-between gap-2">
@@ -289,6 +303,16 @@ export function UserIdentitySettings() {
                                                     <option value="其他">其他</option>
                                                 </select>
                                             </div>
+                                        </div>
+
+                                        <div className="flex flex-col gap-1">
+                                            <label className="menu-desc ml-1">备注 (Remark · 绑定与切换面具时优先显示)</label>
+                                            <Input
+                                                type="text"
+                                                value={identity.remark || ""}
+                                                onChange={(e) => updateIdentity(identity.id, { remark: e.target.value })}
+                                                placeholder="例如：现代线 / 某角色专属面具（留空则显示全名）"
+                                            />
                                         </div>
 
                                         <div className="flex gap-3">
