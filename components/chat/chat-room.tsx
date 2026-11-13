@@ -1704,16 +1704,21 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     }, [character?.name, userIdentity?.name]);
 
     useEffect(() => {
-        const refreshRegexes = () => setRegexRevision(value => value + 1);
+        const refreshRegexes = () => {
+            setRegexRevision(value => value + 1);
+            setUserIdentity(resolveUserIdentity(session.isGroup ? session.participantIds?.[0] : session.contactId, session.isGroup ? "group_chat" : "chat", session.userIdentityId));
+        };
         window.addEventListener("settings-regexes-updated", refreshRegexes);
         window.addEventListener("settings-bindings-updated", refreshRegexes);
+        window.addEventListener("settings-identities-updated", refreshRegexes);
         window.addEventListener("settings-presets-updated", refreshRegexes);
         return () => {
             window.removeEventListener("settings-regexes-updated", refreshRegexes);
             window.removeEventListener("settings-bindings-updated", refreshRegexes);
+            window.removeEventListener("settings-identities-updated", refreshRegexes);
             window.removeEventListener("settings-presets-updated", refreshRegexes);
         };
-    }, []);
+    }, [session.contactId, session.isGroup, session.participantIds, session.userIdentityId]);
 
     const availableShoppingGifts = useMemo(
         () => loadDeliveredShoppingGifts(),
@@ -1721,7 +1726,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     );
 
     useEffect(() => {
-        setUserIdentity(resolveUserIdentity(session.contactId, "chat"));
+        setUserIdentity(resolveUserIdentity(session.isGroup ? session.participantIds?.[0] : session.contactId, session.isGroup ? "group_chat" : "chat", session.userIdentityId));
         setTransientMessages([]);
         setOfflineMode(kvGet(CHAT_OFFLINE_MODE_PREFIX + session.id) === "1");
         setOfflineVisibleCount(OFFLINE_INITIAL_LOAD);

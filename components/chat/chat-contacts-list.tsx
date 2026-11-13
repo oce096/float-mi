@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo, useDeferredValue, useSyncExternalStore } from "react";
-import { loadChatContacts, ChatContact, createOrGetSession, ChatSession, addChatContact, pushChatMessage, loadChatMessages } from "@/lib/chat-storage";
+import { loadChatContacts, ChatContact, createOrGetSession, ChatSession, addChatContact, pushChatMessage, loadChatMessages, CHAT_APP_SETTINGS_UPDATED_EVENT, loadChatAppSettings } from "@/lib/chat-storage";
 import { resolveUserIdentity } from "@/lib/settings-storage";
 import { PENDING_REPLY_PREFIX } from "@/lib/friend-request-engine";
 import { loadCharacters } from "@/lib/character-storage";
@@ -57,7 +57,22 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
     const mascotSettings = useSyncExternalStore(subscribeMascotSettings, getMascotSettingsSnapshot, getMascotSettingsSnapshot);
     const [mascotAvatarUrl, setMascotAvatarUrl] = useState(mascotSettings.avatarImage || DEFAULT_MASCOT_AVATAR);
 
-    const identity = useMemo(() => resolveUserIdentity(), []);
+    const [identity, setIdentity] = useState(() => resolveUserIdentity());
+    const [filterByIdentity, setFilterByIdentity] = useState(() => loadChatAppSettings().filterByCurrentIdentity !== false);
+    useEffect(() => {
+        const sync = () => {
+            setIdentity(resolveUserIdentity());
+            setFilterByIdentity(loadChatAppSettings().filterByCurrentIdentity !== false);
+        };
+        window.addEventListener("settings-bindings-updated", sync);
+        window.addEventListener("settings-identities-updated", sync);
+        window.addEventListener(CHAT_APP_SETTINGS_UPDATED_EVENT, sync);
+        return () => {
+            window.removeEventListener("settings-bindings-updated", sync);
+            window.removeEventListener("settings-identities-updated", sync);
+            window.removeEventListener(CHAT_APP_SETTINGS_UPDATED_EVENT, sync);
+        };
+    }, []);
     const chars = useMemo(() => loadCharacters(), []);
     const deferredContactFilter = useDeferredValue(contactFilter);
     const bodyRef = useRef<HTMLDivElement>(null);
@@ -146,7 +161,7 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
         });
         return { grouped: map, indexLetters: sorted };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [contacts, deferredContactFilter]);
+    }, [contacts, deferredContactFilter, filterByIdentity, identity?.id]);
 
     const handleAccept = async (req: FriendRequest) => {
         setIsProcessing(true);

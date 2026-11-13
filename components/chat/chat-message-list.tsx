@@ -2,11 +2,11 @@
 
 import React, { useState, useEffect, useSyncExternalStore } from "react";
 import { ChevronLeft } from "lucide-react";
-import { loadChatSessions, loadChatContacts, ChatSession, createOrGetSession, createGroupSession, pushChatMessage, addChatContact, loadChatMessages, getLastVisibleSessionMessage, getChatMessagePreview } from "@/lib/chat-storage";
+import { loadChatSessions, loadChatContacts, ChatSession, createOrGetSession, createGroupSession, pushChatMessage, addChatContact, loadChatMessages, getLastVisibleSessionMessage, getChatMessagePreview, CHAT_APP_SETTINGS_UPDATED_EVENT, loadChatAppSettings } from "@/lib/chat-storage";
 import { loadCharacters } from "@/lib/character-storage";
 import { Character } from "@/lib/character-types";
 import { resolveUserIdentity } from "@/lib/settings-storage";
-import type { UserIdentity } from "@/components/settings/user-identity";
+import { getUserIdentityDisplayName, type UserIdentity } from "@/components/settings/user-identity";
 import { PENDING_REPLY_PREFIX } from "@/lib/friend-request-engine";
 import { clearRequestsForCharacter, dispatchFriendRequestUpdated } from "@/lib/friend-request-storage";
 import { UserProfilePanel } from "./user-profile-panel";
@@ -56,6 +56,16 @@ function pickLaterTime(a?: string | null, b?: string | null): string {
  */
 function hasSessionListContent(sessionId: string): boolean {
     return Boolean(getLastVisibleSessionMessage(sessionId)) || Boolean(getLastChatOfflineTurn(sessionId));
+}
+
+function doesSessionMatchIdentity(session: ChatSession, activeIdentityId?: string | null): boolean {
+    if (!activeIdentityId) return true;
+    if (session.userIdentityId) return session.userIdentityId === activeIdentityId;
+    if (session.isGroup) {
+        const memberIds = session.participantIds || [];
+        return memberIds.length === 0 || memberIds.some(cid => resolveUserIdentity(cid, "chat")?.id === activeIdentityId);
+    }
+    return resolveUserIdentity(session.contactId, "chat")?.id === activeIdentityId;
 }
 
 /** 列表排序用的活跃时间：线上最后一条与线下最后一条里更晚的那个 */
@@ -121,8 +131,23 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
     const mascotChat = useSyncExternalStore(subscribeMascotChat, getMascotChatSnapshot, getMascotChatSnapshot);
     const [mascotAvatarUrl, setMascotAvatarUrl] = useState(mascotSettings.avatarImage || DEFAULT_MASCOT_AVATAR);
 
+    const [filterByIdentity, setFilterByIdentity] = useState(() => loadChatAppSettings().filterByCurrentIdentity !== false);
+
     useEffect(() => {
-        setIdentity(resolveUserIdentity());
+        const syncIdentity = () => {
+            setIdentity(resolveUserIdentity());
+            setFilterByIdentity(loadChatAppSettings().filterByCurrentIdentity !== false);
+            setSessions(loadChatSessions());
+        };
+        syncIdentity();
+        window.addEventListener("settings-bindings-updated", syncIdentity);
+        window.addEventListener("settings-identities-updated", syncIdentity);
+        window.addEventListener(CHAT_APP_SETTINGS_UPDATED_EVENT, syncIdentity);
+        return () => {
+            window.removeEventListener("settings-bindings-updated", syncIdentity);
+            window.removeEventListener("settings-identities-updated", syncIdentity);
+            window.removeEventListener(CHAT_APP_SETTINGS_UPDATED_EVENT, syncIdentity);
+        };
     }, []);
 
     useEffect(() => {
@@ -186,7 +211,7 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
                         <button className="page-back-btn shrink-0 mr-2" type="button" onClick={onCloseApp} aria-label="返回">
                             <ChevronLeft size={24} strokeWidth={1.5} />
                         </button>
-                        <div className="flex items-center gap-[10px]">
+                        <div className="flex items-center gap-[10px] cursor-pointer" onClick={() => setShowUserProfile(true)} title="点击切换 User 面具">
                             <div className="w-[36px] h-[36px] rounded-full overflow-hidden bg-[var(--c-input)] flex items-center justify-center shrink-0">
                                 {identity?.avatarUrl ? (
                                     <img src={identity.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
@@ -195,7 +220,7 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
                                 )}
                             </div>
                             <div className="flex flex-col whitespace-nowrap">
-                                <span className="ts-16 font-bold text-[var(--c-text-title)] leading-tight">{identity?.name || "用户"}</span>
+                                <span className="ts-16 font-bold text-[var(--c-text-title)] leading-tight">{getUserIdentityDisplayName(identity, "用户")}</span>
                                 <div className="flex items-center gap-1 mt-1">
                                     <span className="w-[8px] h-[8px] rounded-full bg-[#2dd36f]"></span>
                                     <span className="ts-10 text-[var(--c-icon)] font-medium">在线</span>
@@ -289,6 +314,7 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
                             .filter(s => {
                                 if (!(s.isGroup || contactIds.has(s.contactId))) return false;
                                 if (!hasSessionListContent(s.id)) return false;
+                                if (filterByIdentity && identity?.id && !doesSessionMatchIdentity(s, identity.id)) return false;
                                 if (listTab === "private" && s.isGroup) return false;
                                 if (listTab === "group" && !s.isGroup) return false;
                                 if (!keyword) return true;
@@ -712,9 +738,11 @@ function ContactPicker({ onClose, onSelect }: { onClose: () => void; onSelect: (
     const contacts = loadChatContacts();
     const chars = loadCharacters();
 
+    const activeIdentity = resolveUserIdentity();
+    const filterByIdentity = loadChatAppSettings().filterByCurrentIdentity !== false;
     const enrichedContacts = contacts
         .map(c => ({ ...c, char: chars.find(ch => ch.id === c.characterId) }))
-        .filter(c => c.char) as (typeof contacts[number] & { char: Character })[];
+        .filter(c => c.char && (!filterByIdentity || !activeIdentity || resolveUserIdentity(c.characterId, "chat")?.id === activeIdentity.id)) as (typeof contacts[number] & { char: Character })[];
 
     return (
         <div className="modal-overlay" onClick={onClose}>

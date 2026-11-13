@@ -77,6 +77,8 @@ export type ChatSession = {
     groupMutes?: Record<string, string>; // (characterId | "self") → mute expiry ISO
     allowAdminActionsOnUser?: boolean; // characters may kick/mute the user (default off)
     isSpectator?: boolean; // 围观群：用户不在群内，只能生成/线下
+    /** 会话级（尤其是群聊）绑定的用户身份面具 ID */
+    userIdentityId?: string;
 };
 
 export type ChatMessageStatus = "sending" | "sent" | "read" | "failed";
@@ -270,6 +272,8 @@ export type ChatAppSettings = {
     callVibrationEnabled?: boolean; // 语音/视频来电等待接听时循环振动（默认开；iOS 网页不支持振动则无效果）
     maxToolRounds?: number; // 单条消息的工具循环轮数上限（默认 5；每轮=一次模型请求，轮内调用条数不限）
     floatingDockEnabled?: boolean; // 悬浮球贴边半隐藏收拢模式（默认关）
+    /** 开启后，聊天列表和联系人列表只显示绑定了当前面具的角色和群聊（默认开） */
+    filterByCurrentIdentity?: boolean;
 };
 
 /** 单条消息工具循环轮数上限（默认 5，夹在 1–20 之间） */
