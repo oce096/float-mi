@@ -193,7 +193,7 @@ export function ResourceHubApp({ onClose, onNotice }: { onClose: () => void; onN
     const [busyFile, setBusyFile] = useState<string | null>(null);
     // 导入流程：选文件 → 选目的地 →（聊天室CSS再选角色）
     const [importFile, setImportFile] = useState<string | null>(null);
-    const [pickCharacterFor, setPickCharacterFor] = useState<string | null>(null);
+    const [pickCharacterFor, setPickCharacterFor] = useState<{ file: string; dest: "chat_session_css" | "story_css" } | null>(null);
     const [showSourceEditor, setShowSourceEditor] = useState(false);
     const [sourceDraft, setSourceDraft] = useState<ResourceHubSource>(source);
     // 上传（分类下拉：CUSTOM_FOLDER 表示自定义新分类，配合手动输入框）
@@ -381,6 +381,9 @@ export function ResourceHubApp({ onClose, onNotice }: { onClose: () => void; onN
     const chatContacts = useMemo(() => {
         if (pickCharacterFor === null) return [];
         const characters = loadCharacters();
+        if (pickCharacterFor.dest === "story_css") {
+            return characters.map(c => ({ contactId: c.id, name: c.name || "未命名角色" }));
+        }
         // ChatSession.contactId 存的是「角色 id」（全仓 createOrGetSession 都传角色 id，
         // chat-storage 也用它反查角色名）。这里必须给 characterId，给 contact.id 会建出
         // 一个谁都匹配不上的游离会话，CSS 写进去等于扔了。
@@ -425,6 +428,7 @@ export function ResourceHubApp({ onClose, onNotice }: { onClose: () => void; onN
             const message = await importResourceHubFile(source, path, destination, {
                 contactId,
                 authorName: activeEntry?.author?.trim() || undefined,
+                entryTitle: activeEntry?.name?.trim() || undefined,
                 confirmTrusted: (names) => new Promise<boolean>((resolve) => setConfirmTrusted({ names, resolve })),
             });
             onNotice?.(message);
@@ -460,8 +464,8 @@ export function ResourceHubApp({ onClose, onNotice }: { onClose: () => void; onN
             onNotice?.(typeError);
             return;
         }
-        if (destination === "chat_session_css") {
-            setPickCharacterFor(importFile);
+        if (destination === "chat_session_css" || destination === "story_css") {
+            setPickCharacterFor({ file: importFile, dest: destination });
             setImportFile(null);
             return;
         }
@@ -1160,27 +1164,38 @@ export function ResourceHubApp({ onClose, onNotice }: { onClose: () => void; onN
                 </div>
             )}
 
-            {/* 聊天室 CSS：选择角色 */}
+            {/* 聊天室/剧情 CSS：选择角色或仅存入预设 */}
             {pickCharacterFor && (
                 <div className="rh-dialog-overlay" onClick={importingTo ? undefined : () => setPickCharacterFor(null)}>
                     <div className="rh-dialog" onClick={e => e.stopPropagation()}>
                         <div className="rh-titlebar">
-                            <span className="rh-titlebar-text">应用到哪个角色的聊天室？</span>
+                            <span className="rh-titlebar-text">
+                                {pickCharacterFor.dest === "story_css" ? "应用到哪个角色的剧情？" : "应用到哪个角色的聊天室？"}
+                            </span>
                             <span className="rh-titlebar-controls">
                                 <button className="rh-tb-btn" disabled={!!importingTo} onClick={() => setPickCharacterFor(null)}>✕</button>
                             </span>
                         </div>
                         <div className="rh-dialog-body rh-dest-list">
+                            <button className="rh-dest" disabled={!!importingTo}
+                                onClick={() => void runImport(pickCharacterFor.file, pickCharacterFor.dest)}>
+                                <span className="rh-dest-label">
+                                    {importingTo === pickCharacterFor.dest && <><PixelHourglass size={13} /> </>}
+                                    ★ 仅存入美化预设库（暂不覆盖角色）
+                                </span>
+                            </button>
                             {chatContacts.length > 0 ? chatContacts.map(contact => (
                                 <button key={contact.contactId} className="rh-dest" disabled={!!importingTo}
-                                    onClick={() => void runImport(pickCharacterFor, "chat_session_css", contact.contactId)}>
+                                    onClick={() => void runImport(pickCharacterFor.file, pickCharacterFor.dest, contact.contactId)}>
                                     <span className="rh-dest-label">
                                         {importingTo === contact.contactId && <><PixelHourglass size={13} /> </>}
                                         {contact.name}
                                     </span>
                                 </button>
                             )) : (
-                                <div className="rh-center-hint">还没有聊天联系人，先去聊天里添加角色吧</div>
+                                <div className="rh-center-hint">
+                                    {pickCharacterFor.dest === "story_css" ? "还没有角色，也可直接点上方存入美化预设库" : "还没有聊天联系人，也可点上方直接存入美化预设库"}
+                                </div>
                             )}
                         </div>
                     </div>

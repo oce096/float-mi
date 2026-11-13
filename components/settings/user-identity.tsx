@@ -157,65 +157,87 @@ export function UserIdentitySettings() {
                 </div>
             ) : (
                 <div className="grid grid-cols-2 gap-3">
-                    {identities.map(identity => (
-                        <div
-                            key={identity.id}
-                            className="ui-config-card min-w-0 cursor-pointer overflow-hidden"
-                            style={{ aspectRatio: "3 / 2", padding: "12px", justifyContent: "space-between" }}
-                            role="button"
-                            tabIndex={0}
-                            aria-label={`编辑 ${identity.name || "身份"}`}
-                            onClick={() => setEditingId(identity.id)}
-                            onKeyDown={(event) => {
-                                if (event.target !== event.currentTarget) return;
-                                if (event.key === "Enter" || event.key === " ") {
-                                    event.preventDefault();
-                                    setEditingId(identity.id);
-                                }
-                            }}
-                        >
-                            <div className="min-w-0 flex flex-col gap-1">
-                                <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{getUserIdentityDisplayName(identity)}</span>
-                                {identity.remark?.trim() && identity.name?.trim() && (
-                                    <span className="menu-desc truncate">姓名：{identity.name}</span>
-                                )}
-                                <span className="menu-desc truncate">{identity.occupation || identity.bio || identity.gender || "未填写身份信息"}</span>
-                            </div>
-                            <div className="flex items-end justify-between gap-2">
-                                {identity.avatarUrl ? (
-                                    <img src={identity.avatarUrl} alt={identity.name} className="h-9 w-9 rounded-full object-cover shrink-0" />
-                                ) : (
-                                    <div className="h-9 w-9 rounded-full bg-[var(--c-page-body-bg)] text-[var(--c-icon)] grid place-items-center shrink-0">
-                                        <User size={18} />
-                                    </div>
-                                )}
+                    {identities.map((identity, idx) => {
+                        const remarkTitle = getUserIdentityDisplayName(identity);
+                        const hasRemark = Boolean(identity.remark?.trim());
+                        return (
+                            <div
+                                key={identity.id}
+                                className="ui-config-card min-w-0 cursor-pointer relative flex flex-col justify-between rounded-2xl border border-black/10 bg-[var(--c-card)] p-3 shadow-sm transition-all hover:shadow-md"
+                                style={{ minHeight: 136 }}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`编辑 ${remarkTitle}`}
+                                onClick={() => setEditingId(identity.id)}
+                                onKeyDown={(event) => {
+                                    if (event.target !== event.currentTarget) return;
+                                    if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        setEditingId(identity.id);
+                                    }
+                                }}
+                            >
+                                {/* 档案头编号栏 */}
+                                <div className="flex items-center justify-between border-b border-dashed border-black/15 pb-1.5 mb-2">
+                                    <span className="font-mono text-[10px] tracking-wider text-[var(--c-icon)] uppercase">
+                                        DOS // {String(idx + 1).padStart(2, "0")}
+                                    </span>
+                                    <span className="rounded bg-black/5 px-1.5 py-0.5 font-mono text-[10px] text-[var(--c-text)]">
+                                        {identity.gender || "保密"}
+                                    </span>
+                                </div>
 
-                                <div className="flex gap-2 shrink-0 items-center">
-                                    <button
-                                        type="button"
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            setEditingId(identity.id);
-                                        }}
-                                        className="ui-link-btn"
-                                    >
-                                        <FileEdit size={18} />
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            setConfirmDeleteId(identity.id);
-                                        }}
-                                        className="ui-link-btn"
-                                        data-variant="danger"
-                                    >
-                                        <Trash2 size={18} />
-                                    </button>
+                                {/* 完整相框头像 + 备注/姓名 */}
+                                <div className="flex items-center gap-2.5 min-w-0 my-auto">
+                                    <div className="h-11 w-11 rounded-xl border border-black/10 bg-[var(--c-page-body-bg)] overflow-hidden shrink-0 flex items-center justify-center shadow-inner">
+                                        {identity.avatarUrl ? (
+                                            <img src={identity.avatarUrl} alt={identity.name} className="h-full w-full object-cover" />
+                                        ) : (
+                                            <User size={20} className="text-[var(--c-icon)]" />
+                                        )}
+                                    </div>
+                                    <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+                                        <span className="truncate text-[calc(14px*var(--app-text-scale,1))] font-bold leading-snug text-[var(--c-text-title)]">
+                                            {remarkTitle}
+                                        </span>
+                                        <span className="truncate text-[calc(11px*var(--app-text-scale,1))] text-[var(--c-icon)]">
+                                            {hasRemark ? `姓名：${identity.name || "未填"}` : (identity.occupation || "未填身份")}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {/* 底部元信息 + 按钮 */}
+                                <div className="flex items-center justify-between gap-2 pt-2 mt-2 border-t border-black/5">
+                                    <span className="truncate text-[calc(10.5px*var(--app-text-scale,1))] text-[var(--c-icon)]">
+                                        {[identity.age ? `${identity.age}岁` : "", identity.occupation].filter(Boolean).join(" · ") || "档案卡"}
+                                    </span>
+                                    <div className="flex gap-1.5 shrink-0 items-center">
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                setEditingId(identity.id);
+                                            }}
+                                            className="ui-link-btn"
+                                        >
+                                            <FileEdit size={16} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                setConfirmDeleteId(identity.id);
+                                            }}
+                                            className="ui-link-btn"
+                                            data-variant="danger"
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
 
@@ -233,133 +255,159 @@ export function UserIdentitySettings() {
                                 const identity = identities.find(c => c.id === editingId);
                                 if (!identity) return null;
                                 return (
-                                    <>
-                                        {/* Avatar upload + URL */}
-                                        <div className="flex flex-col items-center gap-2">
-                                            <div
-                                                onClick={() => {
-                                                    const input = document.createElement("input");
-                                                    input.type = "file";
-                                                    input.accept = "image/*";
-                                                    input.onchange = async () => {
-                                                        const file = input.files?.[0];
-                                                        if (!file) return;
-                                                        try {
-                                                            const dataUrl = await fileToDataUrl(file);
-                                                            updateIdentity(identity.id, { avatarUrl: dataUrl });
-                                                        } catch { /* ignore */ }
-                                                    };
-                                                    input.click();
-                                                }}
-                                                className="ui-avatar-upload"
-                                            >
-                                                {identity.avatarUrl ? (
-                                                    <>
-                                                        <img src={identity.avatarUrl} alt="" className="w-full h-full object-cover" />
-                                                        <div className="absolute bottom-0 left-0 right-0 flex justify-center ui-avatar-upload-overlay">
-                                                            <Camera size={14} color="#fff" />
-                                                        </div>
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <User size={28} className="text-[var(--c-icon-active)]" />
-                                                        <span className="ts-10 mt-[2px] text-[var(--c-icon-active)]">点击上传</span>
-                                                    </>
-                                                )}
+                                    <div className="rounded-2xl border border-black/15 bg-[var(--c-card)] p-4 flex flex-col gap-4 shadow-sm">
+                                        {/* 档案夹页眉 */}
+                                        <div className="flex items-center justify-between border-b-2 border-dotted border-black/20 pb-2.5">
+                                            <div className="flex flex-col">
+                                                <span className="font-mono text-[10px] tracking-[0.18em] text-[var(--c-icon)] uppercase">
+                                                    // PERSONNEL DOSSIER
+                                                </span>
+                                                <span className="ts-15 font-bold text-[var(--c-text-title)]">
+                                                    身份面具档案卡
+                                                </span>
                                             </div>
-                                            <div className="flex items-center gap-[6px] w-full max-w-[280px]">
-                                                <Link size={14} className="shrink-0 text-[var(--c-text)]" />
-                                                <Input
-                                                    type="text"
-                                                    value={identity.avatarUrl?.startsWith("data:") ? "" : (identity.avatarUrl || "")}
-                                                    onChange={(e) => updateIdentity(identity.id, { avatarUrl: e.target.value })}
-                                                    placeholder="或粘贴图片URL..."
-                                                    className="flex-1 ts-12 px-[10px] py-[6px]"
-                                                />
-                                            </div>
+                                            <span className="font-mono text-[11px] px-2 py-0.5 rounded-full border border-black/15 text-[var(--c-icon)]">
+                                                #{identity.id.slice(-6).toUpperCase()}
+                                            </span>
                                         </div>
 
-                                        <div className="flex gap-3">
-                                            <div className="flex flex-col gap-1 flex-1 min-w-0">
-                                                <label className="menu-desc ml-1">名字 (Name)</label>
-                                                <Input
-                                                    type="text"
-                                                    value={identity.name}
-                                                    onChange={(e) => updateIdentity(identity.id, { name: e.target.value })}
-                                                    placeholder="您希望AI怎么称呼您..."
-                                                    className="font-medium"
-                                                />
-                                            </div>
-                                            <div className="flex flex-col gap-1 w-[90px] shrink-0">
-                                                <label className="menu-desc ml-1">性别</label>
-                                                <select
-                                                    value={identity.gender}
-                                                    onChange={(e) => updateIdentity(identity.id, { gender: e.target.value })}
-                                                    className="ui-select"
+                                        {/* 上半部：左立绘相框 + 右核心登记栏 */}
+                                        <div className="flex gap-3.5 items-start">
+                                            <div className="flex flex-col items-center gap-1.5 shrink-0">
+                                                <div
+                                                    onClick={() => {
+                                                        const input = document.createElement("input");
+                                                        input.type = "file";
+                                                        input.accept = "image/*";
+                                                        input.onchange = async () => {
+                                                            const file = input.files?.[0];
+                                                            if (!file) return;
+                                                            try {
+                                                                const dataUrl = await fileToDataUrl(file);
+                                                                updateIdentity(identity.id, { avatarUrl: dataUrl });
+                                                            } catch { /* ignore */ }
+                                                        };
+                                                        input.click();
+                                                    }}
+                                                    className="relative w-[92px] h-[114px] rounded-xl border-2 border-black/15 bg-[var(--c-page-body-bg)] p-1.5 shadow-sm cursor-pointer flex flex-col items-center justify-center overflow-hidden"
                                                 >
-                                                    <option value="保密">保密</option>
-                                                    <option value="男">男</option>
-                                                    <option value="女">女</option>
-                                                    <option value="其他">其他</option>
-                                                </select>
+                                                    <div className="w-6 h-1.5 rounded-full bg-black/20 mb-1 shrink-0" />
+                                                    <div className="w-full flex-1 rounded-lg overflow-hidden bg-black/5 flex flex-col items-center justify-center relative">
+                                                        {identity.avatarUrl ? (
+                                                            <>
+                                                                <img src={identity.avatarUrl} alt="" className="w-full h-full object-cover" />
+                                                                <div className="absolute inset-x-0 bottom-0 bg-black/45 py-0.5 flex justify-center">
+                                                                    <Camera size={12} color="#fff" />
+                                                                </div>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <User size={24} className="text-[var(--c-icon)]" />
+                                                                <span className="text-[10px] mt-1 text-[var(--c-icon)]">上传相片</span>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-1 w-[92px]">
+                                                    <Input
+                                                        type="text"
+                                                        value={identity.avatarUrl?.startsWith("data:") ? "" : (identity.avatarUrl || "")}
+                                                        onChange={(e) => updateIdentity(identity.id, { avatarUrl: e.target.value })}
+                                                        placeholder="粘贴图链..."
+                                                        className="w-full text-[10px] px-1.5 py-1"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="flex-1 min-w-0 flex flex-col gap-2.5">
+                                                <div className="flex flex-col gap-0.5 border-b border-dashed border-black/15 pb-1.5">
+                                                    <label className="font-mono text-[10px] text-[var(--c-icon)]">▪ 面具备注 (仅自己分辨 · 角色不可见)</label>
+                                                    <Input
+                                                        type="text"
+                                                        value={identity.remark || ""}
+                                                        onChange={(e) => updateIdentity(identity.id, { remark: e.target.value })}
+                                                        placeholder="如：现代线 / 某角色专属"
+                                                        className="font-semibold"
+                                                    />
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                                                        <label className="font-mono text-[10px] text-[var(--c-icon)]">▪ 真实名称 (AI称呼)</label>
+                                                        <Input
+                                                            type="text"
+                                                            value={identity.name}
+                                                            onChange={(e) => updateIdentity(identity.id, { name: e.target.value })}
+                                                            placeholder="AI对您的称呼"
+                                                        />
+                                                    </div>
+                                                    <div className="flex flex-col gap-0.5 w-[78px] shrink-0">
+                                                        <label className="font-mono text-[10px] text-[var(--c-icon)]">▪ 性别</label>
+                                                        <select
+                                                            value={identity.gender}
+                                                            onChange={(e) => updateIdentity(identity.id, { gender: e.target.value })}
+                                                            className="ui-select"
+                                                        >
+                                                            <option value="保密">保密</option>
+                                                            <option value="男">男</option>
+                                                            <option value="女">女</option>
+                                                            <option value="其他">其他</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                                                        <label className="font-mono text-[10px] text-[var(--c-icon)]">▪ 年龄</label>
+                                                        <input
+                                                            type="text"
+                                                            value={identity.age}
+                                                            onChange={(e) => updateIdentity(identity.id, { age: e.target.value })}
+                                                            placeholder="如: 22"
+                                                            className="ui-input"
+                                                        />
+                                                    </div>
+                                                    <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                                                        <label className="font-mono text-[10px] text-[var(--c-icon)]">▪ 身份/职业</label>
+                                                        <input
+                                                            type="text"
+                                                            value={identity.occupation}
+                                                            onChange={(e) => updateIdentity(identity.id, { occupation: e.target.value })}
+                                                            placeholder="如: 学生"
+                                                            className="ui-input"
+                                                        />
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
 
-                                        <div className="flex flex-col gap-1">
-                                            <label className="menu-desc ml-1">备注 (Remark · 绑定与切换面具时优先显示)</label>
-                                            <Input
-                                                type="text"
-                                                value={identity.remark || ""}
-                                                onChange={(e) => updateIdentity(identity.id, { remark: e.target.value })}
-                                                placeholder="例如：现代线 / 某角色专属面具（留空则显示全名）"
-                                            />
-                                        </div>
-
-                                        <div className="flex gap-3">
-                                            <div className="flex flex-col gap-1 flex-1 min-w-0">
-                                                <label className="menu-desc ml-1">年龄 (Age)</label>
-                                                <input
-                                                    type="text"
-                                                    value={identity.age}
-                                                    onChange={(e) => updateIdentity(identity.id, { age: e.target.value })}
-                                                    placeholder="例如: 24, 未知"
-                                                    className="ui-input"
-                                                />
+                                        {/* 下半部：虚线框档案正文 */}
+                                        <div className="flex flex-col gap-1.5 rounded-xl border border-dashed border-black/20 p-3 bg-black/[0.015]">
+                                            <div className="flex items-center justify-between">
+                                                <label className="font-mono text-[11px] font-bold text-[var(--c-text-title)]">▪ 基础背景档案 // BIO</label>
+                                                <span className="font-mono text-[10px] text-[var(--c-icon)]">BACKGROUND</span>
                                             </div>
-                                            <div className="flex flex-col gap-1 flex-1 min-w-0">
-                                                <label className="menu-desc ml-1">职业 (Occupation)</label>
-                                                <input
-                                                    type="text"
-                                                    value={identity.occupation}
-                                                    onChange={(e) => updateIdentity(identity.id, { occupation: e.target.value })}
-                                                    placeholder="例如: 学生, 自由职业"
-                                                    className="ui-input"
-                                                />
-                                            </div>
-                                        </div>
-
-                                        <div className="flex flex-col gap-1">
-                                            <label className="menu-desc ml-1">简介 (Bio)</label>
                                             <textarea
                                                 value={identity.bio}
                                                 onChange={(e) => updateIdentity(identity.id, { bio: e.target.value })}
                                                 placeholder="简单描述一下自己，这会作为AI了解您的基础背景..."
                                                 rows={3}
-                                                className="ui-textarea"
+                                                className="ui-textarea bg-transparent"
                                             />
                                         </div>
 
-                                        <div className="flex flex-col gap-1">
-                                            <label className="menu-desc ml-1">自定义设定 (Custom Settings)</label>
+                                        <div className="flex flex-col gap-1.5 rounded-xl border border-dashed border-black/20 p-3 bg-black/[0.015]">
+                                            <div className="flex items-center justify-between">
+                                                <label className="font-mono text-[11px] font-bold text-[var(--c-text-title)]">▪ 深度性格与附加设定 // DIRECTIVES</label>
+                                                <span className="font-mono text-[10px] text-[var(--c-icon)]">CUSTOM</span>
+                                            </div>
                                             <textarea
                                                 value={identity.customSettings}
                                                 onChange={(e) => updateIdentity(identity.id, { customSettings: e.target.value })}
                                                 placeholder="更深度的性格爱好描述，对话的特殊要求等..."
                                                 rows={4}
-                                                className="ui-textarea"
+                                                className="ui-textarea bg-transparent"
                                             />
                                         </div>
-                                    </>
+                                    </div>
                                 )
                             })()}
                         </div>

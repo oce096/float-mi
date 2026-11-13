@@ -38,8 +38,9 @@ import { triggerDeleteFriendReaction } from "@/lib/friend-request-engine";
 import { loadCharacters } from "@/lib/character-storage";
 import { isAgentComputerConfigured } from "@/lib/agent-computer";
 import { CharacterComputerPage } from "./character-computer-page";
-import { resolveUserIdentity, loadBindingConfig, saveBindingConfig, getCharacterBinding, setCharacterBinding, loadUserIdentities, loadPresets, resolveBinding } from "@/lib/settings-storage";
+import { resolveUserIdentity, loadBindingConfig, saveBindingConfig, getCharacterBinding, setCharacterBinding, loadUserIdentities, loadVoiceConfigs, loadPresets, resolveBinding } from "@/lib/settings-storage";
 import { getUserIdentityDisplayName, type UserIdentity } from "@/components/settings/user-identity";
+import { DEFAULT_ELEVENLABS_MODELS, ELEVENLABS_LANGUAGE_OPTIONS } from "@/components/settings/voice-settings";
 import { getStatusRegionConfig, saveStatusRegionConfig, presetSupportsStatusRegion, isCustomStatusRegionActive, STATUS_REGION_SCHEME_TARGET, STATUS_REGION_UPDATED_EVENT, type StatusRegionConfig } from "@/lib/chat-status-region";
 import { downloadFile } from "@/lib/download-utils";
 import { getSchemes, saveScheme, deleteScheme, type CSSScheme } from "@/lib/css-scheme-storage";
@@ -527,6 +528,16 @@ export function ChatSettingsPanel({
         : [];
     const [identityRevision, setIdentityRevision] = useState(0);
     const [showIdentityPicker, setShowIdentityPicker] = useState(false);
+    const [showVoiceOverrideModal, setShowVoiceOverrideModal] = useState(false);
+    const [voiceModelDraft, setVoiceModelDraft] = useState(session.voiceModelOverride || "");
+    const [voiceIdDraft, setVoiceIdDraft] = useState(session.voiceIdOverride || "");
+    const [voiceLangDraft, setVoiceLangDraft] = useState(session.voiceLanguageOverride || "");
+    const boundVoiceConfig = useMemo(() => {
+        if (session.isGroup) return null;
+        const slot = resolveBinding(loadBindingConfig(), session.contactId, "chat");
+        if (!slot.voiceConfigId) return null;
+        return loadVoiceConfigs().find(c => c.id === slot.voiceConfigId) || null;
+    }, [identityRevision, session.isGroup, session.contactId]);
     useEffect(() => {
         const sync = () => setIdentityRevision(v => v + 1);
         window.addEventListener("settings-bindings-updated", sync);
@@ -896,6 +907,31 @@ export function ChatSettingsPanel({
                             <ChevronRight size={16} />
                         </div>
                     </button>
+                    {!session.isGroup && (
+                        <button
+                            className="menu-item"
+                            onClick={() => {
+                                setIdentityRevision(v => v + 1);
+                                setVoiceModelDraft(session.voiceModelOverride || "");
+                                setVoiceIdDraft(session.voiceIdOverride || "");
+                                setVoiceLangDraft(session.voiceLanguageOverride || "");
+                                setShowVoiceOverrideModal(true);
+                            }}
+                        >
+                            <ChatInfoIcon icon={Mic} color={BINDING_ACCENTS.voice} />
+                            <div className="menu-label-group">
+                                <span className="menu-label">角色语音模型与 Voice ID</span>
+                                <span className="menu-desc">
+                                    {session.voiceModelOverride || session.voiceIdOverride || session.voiceLanguageOverride
+                                        ? `${session.voiceModelOverride || boundVoiceConfig?.model || "默认模型"} · ${session.voiceIdOverride || "默认音色"}`
+                                        : (boundVoiceConfig
+                                            ? `绑定：${boundVoiceConfig.name || boundVoiceConfig.provider}（点击单独选模型/自建音色）`
+                                            : "未绑定语音配置（可在设置→配置绑定中开启）")}
+                                </span>
+                            </div>
+                            <div className="menu-right"><ChevronRight size={16} /></div>
+                        </button>
+                    )}
                     <button className="menu-item" onClick={openSearchPanel}>
                         <ChatInfoIcon icon={Search} color={BINDING_ACCENTS.api} />
                         <div className="menu-label-group"><span className="menu-label">查找聊天记录</span></div>
@@ -1434,20 +1470,128 @@ export function ChatSettingsPanel({
                 </div>
             )}
 
+            {/* Modal: Per-character Voice Model & Voice ID Override */}
+            {showVoiceOverrideModal && !session.isGroup && (
+                <div className="modal-overlay" onClick={() => setShowVoiceOverrideModal(false)}>
+                    <div className="modal-dialog" onClick={e => e.stopPropagation()}>
+                        <span className="modal-header-title">角色专属语音设置 · {characterName}</span>
+                        <div className="flex flex-col gap-3 w-full">
+                            <div className="flex flex-col gap-1">
+                                <label className="menu-desc ml-1">语音模型 (Model · 如 Eleven v4 / v40Turbo)</label>
+                                <select
+                                    value={DEFAULT_ELEVENLABS_MODELS.some(m => m.id === voiceModelDraft) ? voiceModelDraft : "__manual__"}
+                                    onChange={e => {
+                                        if (e.target.value !== "__manual__") setVoiceModelDraft(e.target.value);
+                                    }}
+                                    className="ui-select"
+                                >
+                                    <option value="">跟随语音配置默认 ({boundVoiceConfig?.model || "eleven_v4_turbo"})</option>
+                                    {DEFAULT_ELEVENLABS_MODELS.filter(m => m.id).map(m => (
+                                        <option key={m.id} value={m.id}>{m.name}</option>
+                                    ))}
+                                    <option value="__manual__">手动输入其他模型...</option>
+                                </select>
+                                {!DEFAULT_ELEVENLABS_MODELS.some(m => m.id === voiceModelDraft) && (
+                                    <Input
+                                        type="text"
+                                        value={voiceModelDraft}
+                                        onChange={e => setVoiceModelDraft(e.target.value)}
+                                        placeholder="输入模型 ID（如 eleven_v4 / speech-2.8-hd）"
+                                    />
+                                )}
+                            </div>
+
+                            <div className="flex flex-col gap-1">
+                                <label className="menu-desc ml-1">专属音色 / 自建 Voice ID</label>
+                                {(boundVoiceConfig?.customVoices?.length || 0) > 0 && (
+                                    <select
+                                        value={boundVoiceConfig!.customVoices!.some(v => v.id === voiceIdDraft) ? voiceIdDraft : ""}
+                                        onChange={e => { if (e.target.value) setVoiceIdDraft(e.target.value); }}
+                                        className="ui-select mb-1"
+                                    >
+                                        <option value="">从已拉取的自建/克隆音色中快速选择...</option>
+                                        {boundVoiceConfig!.customVoices!.map(v => (
+                                            <option key={v.id} value={v.id}>{v.name}</option>
+                                        ))}
+                                    </select>
+                                )}
+                                <Input
+                                    type="text"
+                                    value={voiceIdDraft}
+                                    onChange={e => setVoiceIdDraft(e.target.value)}
+                                    placeholder={boundVoiceConfig?.defaultVoice ? `留空使用默认 (${boundVoiceConfig.defaultVoice})` : "直接输入角色的 Voice ID"}
+                                />
+                            </div>
+
+                            <div className="flex flex-col gap-1">
+                                <label className="menu-desc ml-1">角色外语语种（防止外语角色说中文）</label>
+                                <select
+                                    value={voiceLangDraft}
+                                    onChange={e => setVoiceLangDraft(e.target.value)}
+                                    className="ui-select"
+                                >
+                                    {ELEVENLABS_LANGUAGE_OPTIONS.map(opt => (
+                                        <option key={opt.value || "auto"} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 w-full mt-2">
+                            <button
+                                type="button"
+                                className="ui-btn ui-btn-outline flex-1"
+                                onClick={() => {
+                                    setVoiceModelDraft("");
+                                    setVoiceIdDraft("");
+                                    setVoiceLangDraft("");
+                                }}
+                            >
+                                清空覆盖
+                            </button>
+                            <button
+                                type="button"
+                                className="ui-btn ui-btn-ghost flex-1"
+                                onClick={() => setShowVoiceOverrideModal(false)}
+                            >
+                                取消
+                            </button>
+                            <button
+                                type="button"
+                                className="ui-btn ui-btn-primary flex-1"
+                                onClick={() => {
+                                    updateSession({
+                                        voiceModelOverride: voiceModelDraft.trim() || undefined,
+                                        voiceIdOverride: voiceIdDraft.trim() || undefined,
+                                        voiceLanguageOverride: voiceLangDraft.trim() || undefined,
+                                    });
+                                    setShowVoiceOverrideModal(false);
+                                }}
+                            >
+                                保存
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Modal: User Identity (Mask) Picker */}
             {showIdentityPicker && (
                 <div className="modal-overlay" onClick={() => setShowIdentityPicker(false)}>
                     <div className="modal-dialog" onClick={e => e.stopPropagation()}>
                         <span className="modal-header-title">{session.isGroup ? "切换本群面具" : `切换与 ${characterName} 的面具`}</span>
-                        <div className="flex flex-col gap-1.5 w-full max-h-[52vh] overflow-y-auto">
+                        <div className="flex flex-col gap-2 w-full max-h-[52vh] overflow-y-auto">
                             <button
                                 type="button"
-                                className="chat-contact-item justify-between px-3 py-2.5 rounded-xl"
-                                style={{ background: !explicitSessionIdentityId ? "color-mix(in srgb, var(--c-text) 8%, transparent)" : undefined }}
+                                className="flex items-center justify-between gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-all"
+                                style={{
+                                    background: !explicitSessionIdentityId
+                                        ? "color-mix(in srgb, var(--c-text) 10%, transparent)"
+                                        : "var(--c-input)",
+                                }}
                                 onClick={() => selectSessionIdentity(undefined)}
                             >
                                 <div className="flex flex-col items-start min-w-0 flex-1 text-left">
-                                    <span className="ts-14 font-medium text-[var(--c-text-title)]">跟随全局默认</span>
+                                    <span className="ts-14 font-bold text-[var(--c-text-title)]">跟随全局默认</span>
                                     <span className="ts-11 text-[var(--c-icon)] truncate w-full">
                                         当前全局：{getUserIdentityDisplayName(resolveUserIdentity(), "未设置")}
                                     </span>
@@ -1457,23 +1601,30 @@ export function ChatSettingsPanel({
                             {allIdentities.map((item: UserIdentity) => {
                                 const selected = explicitSessionIdentityId === item.id;
                                 const displayName = getUserIdentityDisplayName(item);
+                                const hasRemark = Boolean(item.remark?.trim());
                                 return (
                                     <button
                                         key={item.id}
                                         type="button"
-                                        className="chat-contact-item justify-between px-3 py-2.5 rounded-xl"
-                                        style={{ background: selected ? "color-mix(in srgb, var(--c-text) 8%, transparent)" : undefined }}
+                                        className="flex items-center justify-between gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-all"
+                                        style={{
+                                            background: selected
+                                                ? "color-mix(in srgb, var(--c-text) 10%, transparent)"
+                                                : "var(--c-input)",
+                                        }}
                                         onClick={() => selectSessionIdentity(item.id)}
                                     >
-                                        <div className="flex items-center gap-2.5 min-w-0 flex-1 text-left">
-                                            <div className="w-8 h-8 rounded-full overflow-hidden bg-[var(--c-input)] shrink-0 flex items-center justify-center">
-                                                {item.avatarUrl ? <img src={item.avatarUrl} alt="" className="w-full h-full object-cover" /> : <User size={15} />}
+                                        <div className="flex items-center gap-3 min-w-0 flex-1 text-left">
+                                            <div className="w-10 h-10 rounded-full overflow-hidden bg-[var(--c-card)] border border-black/10 shrink-0 flex items-center justify-center">
+                                                {item.avatarUrl ? <img src={item.avatarUrl} alt="" className="w-full h-full object-cover" /> : <User size={18} />}
                                             </div>
                                             <div className="flex flex-col min-w-0 flex-1">
-                                                <span className="ts-14 font-medium text-[var(--c-text-title)] truncate">{displayName}</span>
-                                                <span className="ts-11 text-[var(--c-icon)] truncate">
-                                                    {item.remark?.trim() ? `姓名：${item.name} · ` : ""}{item.occupation || item.bio || item.gender || "无简介"}
-                                                </span>
+                                                <span className="ts-14 font-bold text-[var(--c-text-title)] truncate">{displayName}</span>
+                                                {hasRemark && (
+                                                    <span className="ts-11 text-[var(--c-icon)] truncate">
+                                                        姓名：{item.name}
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
                                         {selected && <Check size={16} className="text-[var(--c-text-title)] shrink-0" />}

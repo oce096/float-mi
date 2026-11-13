@@ -7,6 +7,7 @@ import {
   loadWorldBooks,
   resolveBinding,
   resolveUserIdentity,
+  applyWorldBookEntryOverrides,
 } from "./settings-storage";
 import type { ApiConfig, PresetConfig, RegexConfig, WorldBookConfig } from "./settings-types";
 import { assemblePromptPayload, type LLMMessage } from "./llm-prompt-assembler";
@@ -109,9 +110,10 @@ function resolveStoryConfigs(characterId: string): {
     .filter(Boolean) as RegexConfig[];
 
   const allWorldBooks = loadWorldBooks();
-  const worldBooks = (activeSlot.worldBookIds || [])
+  const rawWorldBooks = (activeSlot.worldBookIds || [])
     .map((id) => allWorldBooks.find((worldBook) => worldBook.id === id))
     .filter(Boolean) as WorldBookConfig[];
+  const worldBooks = applyWorldBookEntryOverrides(rawWorldBooks, characterId);
   const summaryTag = preset?.story_summary_tag?.trim() || "summary";
 
   return {

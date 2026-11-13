@@ -33,6 +33,7 @@ import {
     loadWorldBooks,
     loadRegexes,
     resolveUserIdentity,
+    applyWorldBookEntryOverrides,
 } from "./settings-storage";
 import { assemblePromptPayload, applyOutputRegex, type LLMMessage, type LLMContentPart } from "./llm-prompt-assembler";
 import { MacroEngine, postProcessTrim } from "./macro-engine";
@@ -1848,9 +1849,10 @@ export async function buildChatPromptMessages(
     const allWorldBooks = loadWorldBooks();
     const extraWorldBookIds = options?.extraWorldBookIds ?? [];
     const worldBookIds = [...new Set([...(activeSlot.worldBookIds || []), ...extraWorldBookIds])];
-    const worldBooks = promptProfile?.enableWorldBooks === false
+    const rawWorldBooks = promptProfile?.enableWorldBooks === false
         ? []
         : worldBookIds.map(id => allWorldBooks.find(w => w.id === id)).filter(Boolean) as typeof allWorldBooks;
+    const worldBooks = applyWorldBookEntryOverrides(rawWorldBooks, character.id);
 
     const allRegexes = loadRegexes();
     const regexes = promptProfile?.enableRegexes === false

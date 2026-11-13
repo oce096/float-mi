@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useContext, useCallback } from "react";
-import { Plus, BookOpen, Trash2, Upload, Download, ChevronLeft, AlertCircle, Maximize2, Replace } from "lucide-react";
+import { Plus, BookOpen, Trash2, Upload, Download, ChevronLeft, AlertCircle, Maximize2, Replace, GripVertical } from "lucide-react";
 import {
     loadWorldBooks,
     saveWorldBooks,
@@ -456,6 +456,24 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
         reader.readAsText(file);
     };
 
+    const [draggingUid, setDraggingUid] = useState<string | null>(null);
+    const [dragOverUid, setDragOverUid] = useState<string | null>(null);
+
+    const reorderEntries = (fromUid: string, toUid: string) => {
+        if (!activeBook || !fromUid || !toUid || fromUid === toUid) return;
+        const list = [...activeBook.entries];
+        const fromIdx = list.findIndex(e => e.uid === fromUid);
+        const toIdx = list.findIndex(e => e.uid === toUid);
+        if (fromIdx < 0 || toIdx < 0) return;
+        const [moved] = list.splice(fromIdx, 1);
+        list.splice(toIdx, 0, moved);
+        const reordered = list.map((item, idx) => ({
+            ...item,
+            insertion_order: (idx + 1) * 10,
+        }));
+        updateBook(activeBook.id, { entries: reordered });
+    };
+
     const updateEntry = (uid: string, updates: Partial<WorldBookEntry>) => {
         if (!activeBook) return;
         const newEntries = activeBook.entries.map(e => e.uid === uid ? { ...e, ...updates } : e);
@@ -591,10 +609,41 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
                                 ) : (
                                     visibleEntries.map(entry => {
                                         const isEditing = editingUid === entry.uid;
+                                        const isDragging = draggingUid === entry.uid;
+                                        const isDragOver = dragOverUid === entry.uid && draggingUid !== entry.uid;
 
                                         return (
-                                            <SwipeActionRow
+                                            <div
                                                 key={entry.uid}
+                                                data-wb-entry-uid={entry.uid}
+                                                draggable={!isEditing}
+                                                onDragStart={(e) => {
+                                                    setDraggingUid(entry.uid);
+                                                    e.dataTransfer.effectAllowed = "move";
+                                                    e.dataTransfer.setData("text/plain", entry.uid);
+                                                }}
+                                                onDragOver={(e) => {
+                                                    e.preventDefault();
+                                                    if (dragOverUid !== entry.uid) setDragOverUid(entry.uid);
+                                                }}
+                                                onDrop={(e) => {
+                                                    e.preventDefault();
+                                                    if (draggingUid && draggingUid !== entry.uid) {
+                                                        reorderEntries(draggingUid, entry.uid);
+                                                    }
+                                                    setDraggingUid(null);
+                                                    setDragOverUid(null);
+                                                }}
+                                                onDragEnd={() => {
+                                                    setDraggingUid(null);
+                                                    setDragOverUid(null);
+                                                }}
+                                                style={{
+                                                    opacity: isDragging ? 0.55 : 1,
+                                                    borderTop: isDragOver ? "2px solid var(--c-text-title)" : undefined,
+                                                }}
+                                            >
+                                            <SwipeActionRow
                                                 controller={swipe}
                                                 id={entry.uid}
                                                 disabled={isEditing}
@@ -657,6 +706,36 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
                                             >
                                                 {/* Summary Row */}
                                                 <div className="flex justify-between items-start">
+                                                    <div
+                                                        className="mt-0.5 mr-2 p-1 -ml-1 text-[var(--c-icon)] cursor-grab active:cursor-grabbing touch-none select-none shrink-0"
+                                                        title="按住上下拖拽调整顺序"
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        onTouchStart={(e) => {
+                                                            e.stopPropagation();
+                                                            setDraggingUid(entry.uid);
+                                                        }}
+                                                        onTouchMove={(e) => {
+                                                            e.stopPropagation();
+                                                            const touch = e.touches[0];
+                                                            if (!touch) return;
+                                                            const targetEl = document.elementFromPoint(touch.clientX, touch.clientY);
+                                                            const rowEl = targetEl?.closest("[data-wb-entry-uid]") as HTMLElement | null;
+                                                            const overUid = rowEl?.dataset.wbEntryUid;
+                                                            if (overUid && overUid !== dragOverUid) {
+                                                                setDragOverUid(overUid);
+                                                            }
+                                                        }}
+                                                        onTouchEnd={(e) => {
+                                                            e.stopPropagation();
+                                                            if (draggingUid && dragOverUid && draggingUid !== dragOverUid) {
+                                                                reorderEntries(draggingUid, dragOverUid);
+                                                            }
+                                                            setDraggingUid(null);
+                                                            setDragOverUid(null);
+                                                        }}
+                                                    >
+                                                        <GripVertical size={17} />
+                                                    </div>
                                                     <button
                                                         onClick={() => {
                                                             if (swipe.consumeClickSuppression()) return;
@@ -834,6 +913,7 @@ export function WorldBookManager({ isActive = true }: { isActive?: boolean } = {
                                                 )}
                                             </div>
                                             </SwipeActionRow>
+                                            </div>
                                         )
                                     })
                                 )}

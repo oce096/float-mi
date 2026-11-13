@@ -2,12 +2,23 @@
 
 import type { VoiceApiConfig, ContentAppId } from "./settings-types";
 import { loadVoiceConfigs, loadBindingConfig, resolveBinding } from "./settings-storage";
+import { splitBilingualText } from "./bilingual-text";
+import { loadChatSessions } from "./chat-storage";
 
 export type VoiceApiConfigResolved = VoiceApiConfig;
 
+/** 剥离双语翻译的中文译文行/括号译文，只保留角色的外语原文供 TTS 合成（防外语角色念中文） */
+export function stripTranslationForTts(text: string): string {
+    return text
+        .split("\n")
+        .map(line => splitBilingualText(line)?.original || line)
+        .join("\n")
+        .trim();
+}
+
 /**
- * Resolve the TTS voice config for a character via the binding cascade.
- * Returns null if no voice config is bound or found.
+ * Resolve the TTS voice config for a character via the binding cascade,
+ * merging per-character single-chat overrides (model / voiceId / languageCode).
  */
 export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): VoiceApiConfig | null {
     const bindings = loadBindingConfig();
@@ -15,7 +26,18 @@ export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): V
     if (!slot.voiceConfigId) return null;
 
     const configs = loadVoiceConfigs();
-    return configs.find(c => c.id === slot.voiceConfigId) || null;
+    const base = configs.find(c => c.id === slot.voiceConfigId);
+    if (!base) return null;
+
+    const session = loadChatSessions().find(s => !s.isGroup && s.contactId === characterId);
+    if (!session) return base;
+
+    return {
+        ...base,
+        model: session.voiceModelOverride?.trim() || base.model,
+        defaultVoice: session.voiceIdOverride?.trim() || base.defaultVoice,
+        elevenLanguageCode: session.voiceLanguageOverride?.trim() || base.elevenLanguageCode,
+    };
 }
 
 /**
@@ -180,12 +202,16 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
 
 // ── ElevenLabs TTS ──────────────────────────────────
 
-async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+async function synthesizeElevenLabs(rawText: string, config: VoiceApiConfig): Promise<Blob | null> {
     if (!config.apiKey) throw new Error("ElevenLabs API Key 未配置");
+    const text = stripTranslationForTts(rawText);
+    if (!text) return null;
+
     const voiceId = (config.defaultVoice || "21m00Tcm4TlvDq8ikWAM").trim();
     if (!voiceId) throw new Error("ElevenLabs Voice ID 未配置");
 
     const baseUrl = (config.baseUrl || "https://api.elevenlabs.io/v1").replace(/\/$/, "");
+    const modelId = config.model?.trim() || "eleven_v4_turbo";
     const stability = typeof config.elevenStability === "number" && Number.isFinite(config.elevenStability)
         ? Math.min(1, Math.max(0, config.elevenStability))
         : 0.5;
@@ -196,6 +222,19 @@ async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promi
         ? Math.min(1.2, Math.max(0.7, config.speechSpeed))
         : 1.0;
 
+    const payload: Record<string, unknown> = {
+        text,
+        model_id: modelId,
+        voice_settings: {
+            stability,
+            similarity_boost: similarityBoost,
+            speed,
+        },
+    };
+    if (config.elevenLanguageCode?.trim()) {
+        payload.language_code = config.elevenLanguageCode.trim();
+    }
+
     const response = await fetchWithTimeout(`${baseUrl}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
         method: "POST",
         headers: {
@@ -203,15 +242,7 @@ async function synthesizeElevenLabs(text: string, config: VoiceApiConfig): Promi
             "Content-Type": "application/json",
             Accept: "audio/mpeg",
         },
-        body: JSON.stringify({
-            text,
-            model_id: config.model || "eleven_multilingual_v2",
-            voice_settings: {
-                stability,
-                similarity_boost: similarityBoost,
-                speed,
-            },
-        }),
+        body: JSON.stringify(payload),
     });
 
     if (!response.ok) {

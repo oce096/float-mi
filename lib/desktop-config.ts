@@ -29,7 +29,8 @@ export type IconId =
   | "worldbuilder"
   | "realitybridge"
   | "qa"
-  | "mixology";
+  | "mixology"
+  | "offline_chat";
 
 // 桌面文件夹：以 folder: 前缀的 id 伪装成图标占一个格子参与拖拽/换页，
 // 内容（名字 + 成员图标）另存 DesktopFolderMap。文件夹不允许进 dock。
@@ -64,6 +65,7 @@ export const PAGE_2_DEFAULT: IconId[] = [
   "xiaohongshu",
   "dwelling",
   "story",
+  "offline_chat",
   "vnmode",
   "mapmode"
 ];
@@ -125,4 +127,5 @@ export const ICONS: Record<IconId, IconMeta> = {
   },
   qa: { id: "qa", label: "工坊", tone: "var(--c-icon-qa, #4a505c99)", placeholder: false },
   mixology: { id: "mixology", label: "独家特调", tone: "var(--c-icon-violet)", placeholder: false },
+  offline_chat: { id: "offline_chat", label: "线下", tone: "var(--c-icon-story, #6e7b8b)", placeholder: false },
 };
