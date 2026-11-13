@@ -39,12 +39,27 @@ const VOICE_PROVIDER_OPTIONS = [
     { value: "ElevenLabs", label: "ElevenLabs (ele 语音)" },
 ];
 
-const DEFAULT_ELEVENLABS_MODELS = [
-    { id: "eleven_multilingual_v2", name: "eleven_multilingual_v2 (多语言推荐)" },
-    { id: "eleven_flash_v2_5", name: "eleven_flash_v2_5 (极速低延迟)" },
-    { id: "eleven_turbo_v2_5", name: "eleven_turbo_v2_5 (高质量均衡)" },
-    { id: "eleven_v3", name: "eleven_v3" },
-    { id: "eleven_monolingual_v1", name: "eleven_monolingual_v1" },
+export const DEFAULT_ELEVENLABS_MODELS = [
+    { id: "", name: "暂不选定模型（在单聊设置中为各角色单独选）" },
+    { id: "eleven_v4", name: "Eleven v4 (eleven_v4)" },
+    { id: "eleven_v4_turbo", name: "Eleven v40Turbo / v4 Turbo (eleven_v4_turbo)" },
+    { id: "eleven_multilingual_v2", name: "Eleven Multilingual v2" },
+    { id: "eleven_flash_v2_5", name: "Eleven Flash v2.5 (极速低延迟)" },
+    { id: "eleven_turbo_v2_5", name: "Eleven Turbo v2.5 (高质量均衡)" },
+    { id: "eleven_v3", name: "Eleven v3" },
+];
+
+export const ELEVENLABS_LANGUAGE_OPTIONS = [
+    { value: "", label: "按外语原文自动识别（已自动剔除中文译文）" },
+    { value: "en", label: "英语 (English - en)" },
+    { value: "ja", label: "日语 (Japanese - ja)" },
+    { value: "ko", label: "韩语 (Korean - ko)" },
+    { value: "ru", label: "俄语 (Russian - ru)" },
+    { value: "fr", label: "法语 (French - fr)" },
+    { value: "de", label: "德语 (German - de)" },
+    { value: "es", label: "西班牙语 (Spanish - es)" },
+    { value: "it", label: "意大利语 (Italian - it)" },
+    { value: "pt", label: "葡萄牙语 (Portuguese - pt)" },
 ];
 
 const DEFAULT_ELEVENLABS_VOICES = [
@@ -364,7 +379,7 @@ export function VoiceSettings() {
             updateConfig(id, {
                 provider: "ElevenLabs",
                 baseUrl: wasEleven ? (current?.baseUrl || DEFAULT_ELEVENLABS_BASE_URL) : DEFAULT_ELEVENLABS_BASE_URL,
-                model: wasEleven ? (current?.model || "eleven_multilingual_v2") : "eleven_multilingual_v2",
+                model: wasEleven ? (current?.model ?? "") : "",
                 defaultVoice: wasEleven ? (current?.defaultVoice || "21m00Tcm4TlvDq8ikWAM") : "21m00Tcm4TlvDq8ikWAM",
                 speechSpeed: wasEleven ? (current?.speechSpeed ?? DEFAULT_SPEECH_SPEED) : DEFAULT_SPEECH_SPEED,
                 elevenStability: wasEleven ? (current?.elevenStability ?? DEFAULT_ELEVENLABS_STABILITY) : DEFAULT_ELEVENLABS_STABILITY,
@@ -528,7 +543,7 @@ export function VoiceSettings() {
         }
     };
 
-    const fetchVoices = async (config: VoiceApiConfig) => {
+    const fetchVoices = async (config: VoiceApiConfig, options?: { customOnly?: boolean }) => {
         setIsFetching(prev => ({ ...prev, [config.id]: true }));
         setFetchError(prev => ({ ...prev, [config.id]: "" }));
 
@@ -574,14 +589,25 @@ export function VoiceSettings() {
                     throw new Error(data.detail?.message || data.message || `同步失败 (${response.status})`);
                 }
                 const rawVoices = Array.isArray(data.voices) ? data.voices : [];
-                const synced: VoiceOption[] = rawVoices
+                const filteredRaw = options?.customOnly
+                    ? rawVoices.filter((v: Record<string, unknown>) => v?.category && v.category !== "premade")
+                    : rawVoices;
+                const synced: VoiceOption[] = filteredRaw
                     .filter((v: Record<string, unknown>) => typeof v?.voice_id === "string" && v.voice_id)
                     .map((v: Record<string, unknown>) => ({
                         id: String(v.voice_id),
                         name: `${String(v.name || v.voice_id)}${v.category ? ` [${v.category}]` : ""} (${String(v.voice_id)})`,
                     }));
-                const nextCustomVoices = uniqueOptions([...synced, ...(config.customVoices || [])]);
-                updateConfig(config.id, { customVoices: nextCustomVoices });
+                if (options?.customOnly && synced.length === 0) {
+                    setFetchError(prev => ({ ...prev, [config.id]: "未检测到自建/克隆语音模型（账户下仅检出官方 premade 音色）" }));
+                }
+                const nextCustomVoices = options?.customOnly
+                    ? uniqueOptions(synced)
+                    : uniqueOptions([...synced, ...(config.customVoices || [])]);
+                updateConfig(config.id, {
+                    customVoices: nextCustomVoices,
+                    ...(options?.customOnly && synced[0] ? { defaultVoice: synced[0].id } : {}),
+                });
                 setFetchedVoices(prev => ({ ...prev, [config.id]: nextCustomVoices }));
             } else {
                 throw new Error("该服务商暂不支持拉取模型列表");
@@ -613,9 +639,11 @@ export function VoiceSettings() {
         setPlayingVoiceId(config.id);
 
         try {
-            const previewText = config.provider === "Minimax" && config.languageBoost
-                ? MINIMAX_PREVIEW_TEXT[config.languageBoost] || "你好，很高兴认识你。这是一段语音试听。"
-                : "你好，我现在是" + (config.defaultVoice || "默认") + "音色。很高兴认识你。";
+            const previewText = config.provider === "ElevenLabs"
+                ? "Hello! Nice to meet you. This is a voice preview."
+                : (config.provider === "Minimax" && config.languageBoost
+                    ? MINIMAX_PREVIEW_TEXT[config.languageBoost] || "你好，很高兴认识你。这是一段语音试听。"
+                    : "你好，我现在是" + (config.defaultVoice || "默认") + "音色。很高兴认识你。");
             const blob = await synthesizeSpeech(
                 previewText,
                 config,
@@ -858,7 +886,7 @@ export function VoiceSettings() {
                                                         </div>
                                                     ) : (
                                                         <select
-                                                            value={DEFAULT_ELEVENLABS_MODELS.some(m => m.id === config.model) ? config.model : "__manual__"}
+                                                            value={DEFAULT_ELEVENLABS_MODELS.some(m => m.id === (config.model ?? "")) ? (config.model ?? "") : "__manual__"}
                                                             onChange={(e) => {
                                                                 if (e.target.value === "__manual__") {
                                                                     setManualModelIds(prev => ({ ...prev, [config.id]: true }));
@@ -869,11 +897,23 @@ export function VoiceSettings() {
                                                             className="ui-select"
                                                         >
                                                             {DEFAULT_ELEVENLABS_MODELS.map(model => (
-                                                                <option key={model.id} value={model.id}>{model.name}</option>
+                                                                <option key={model.id || "__unset__"} value={model.id}>{model.name}</option>
                                                             ))}
                                                             <option value="__manual__">手动输入...</option>
                                                         </select>
                                                     )}
+                                                </div>
+                                                <div className="flex flex-col gap-1">
+                                                    <label className="menu-desc ml-1">外语发音语种（防外语角色说中文）</label>
+                                                    <select
+                                                        value={config.elevenLanguageCode || ""}
+                                                        onChange={(e) => updateConfig(config.id, { elevenLanguageCode: e.target.value || undefined })}
+                                                        className="ui-select"
+                                                    >
+                                                        {ELEVENLABS_LANGUAGE_OPTIONS.map(opt => (
+                                                            <option key={opt.value || "auto"} value={opt.value}>{opt.label}</option>
+                                                        ))}
+                                                    </select>
                                                 </div>
                                                 <div className="flex flex-col gap-1">
                                                     <div className="flex items-center justify-between px-1">
@@ -1083,16 +1123,40 @@ export function VoiceSettings() {
                                                 </div>
 
                                                 <div className="flex gap-2 mt-0.5">
-                                                    <button
-                                                        onClick={() => fetchVoices(config)}
-                                                        disabled={isFetching[config.id]}
-                                                        className="ui-btn ui-btn ui-btn-soft-action w-full"
-                                                    >
-                                                        <RefreshCw size={16} className={isFetching[config.id] ? "animate-spin" : ""} />
-                                                        {isFetching[config.id] ? "同步中..." : (config.provider === "Minimax" || config.provider === "ElevenLabs") ? "同步音色列表" : "显示默认音色"}
-                                                    </button>
+                                                    {config.provider === "ElevenLabs" ? (
+                                                        <>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => fetchVoices(config, { customOnly: true })}
+                                                                disabled={isFetching[config.id]}
+                                                                className="ui-btn ui-btn-primary flex-1"
+                                                            >
+                                                                <RefreshCw size={15} className={isFetching[config.id] ? "animate-spin" : ""} />
+                                                                {isFetching[config.id] ? "拉取中..." : "仅拉取我自建的语音"}
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => fetchVoices(config, { customOnly: false })}
+                                                                disabled={isFetching[config.id]}
+                                                                className="ui-btn ui-btn-soft-action flex-1"
+                                                            >
+                                                                拉取全部音色
+                                                            </button>
+                                                        </>
+                                                    ) : (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => fetchVoices(config)}
+                                                            disabled={isFetching[config.id]}
+                                                            className="ui-btn ui-btn-soft-action w-full"
+                                                        >
+                                                            <RefreshCw size={16} className={isFetching[config.id] ? "animate-spin" : ""} />
+                                                            {isFetching[config.id] ? "同步中..." : config.provider === "Minimax" ? "同步音色列表" : "显示默认音色"}
+                                                        </button>
+                                                    )}
                                                     {config.provider === "Minimax" && (
                                                         <button
+                                                            type="button"
                                                             onClick={() => openCloneModal(config)}
                                                             disabled={!config.apiKey.trim()}
                                                             className="ui-btn ui-btn-soft-action w-full"

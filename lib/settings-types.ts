@@ -175,6 +175,8 @@ export type VoiceApiConfig = {
     elevenStability?: number;
     /** ElevenLabs voice_settings.similarity_boost（0..1，默认 0.75）。 */
     elevenSimilarity?: number;
+    /** ElevenLabs 外语发音语种（如 en, ja, ko, ru, fr, de），防外语角色说中文 */
+    elevenLanguageCode?: string;
     customVoices?: { id: string; name: string; createdAt?: number }[];
     enableSTT: boolean;
     enableTTS: boolean;
@@ -304,11 +306,15 @@ export type CharacterBinding = {
     characterId: string;
     defaults: BindingSlot;
     appOverrides: Partial<Record<string, BindingSlot>>;
+    /** 角色级世界书条目独立开关覆写：key 为 `${worldBookId}:${entryUid}`，true=强制开，false=强制关 */
+    worldBookEntryOverrides?: Record<string, boolean>;
 };
 
 // Overall binding configuration
 export type BindingConfig = {
     globalDefaults: BindingSlot;
+    /** 全局级世界书条目独立开关覆写：key 为 `${worldBookId}:${entryUid}` */
+    globalWorldBookEntryOverrides?: Record<string, boolean>;
     /** App-level defaults shared by every character; character app overrides still win. */
     appDefaults?: Partial<Record<string, BindingSlot>>;
     characterBindings: CharacterBinding[];

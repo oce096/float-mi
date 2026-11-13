@@ -79,6 +79,12 @@ export type ChatSession = {
     isSpectator?: boolean; // 围观群：用户不在群内，只能生成/线下
     /** 会话级（尤其是群聊）绑定的用户身份面具 ID */
     userIdentityId?: string;
+    /** 单聊覆盖：指定该角色的语音模型（如 eleven_v4 / eleven_v4_turbo），留空跟随语音配置 */
+    voiceModelOverride?: string;
+    /** 单聊覆盖：指定该角色的专属 Voice ID，留空跟随语音配置 */
+    voiceIdOverride?: string;
+    /** 单聊覆盖：指定该角色的外语发音语种（如 en / ja / ko / ru），防止外语角色说中文 */
+    voiceLanguageOverride?: string;
 };
 
 export type ChatMessageStatus = "sending" | "sent" | "read" | "failed";

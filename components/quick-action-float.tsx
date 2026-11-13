@@ -19,7 +19,10 @@ import {
     loadWorldBooks,
     saveBindingConfig,
     setCharacterBinding,
+    getWorldBookEntryOverrides,
+    setWorldBookEntryOverride,
 } from "@/lib/settings-storage";
+import { Toggle } from "@/components/ui/form";
 import type { ApiConfig, BindingConfig, BindingSlot, WorldBookConfig } from "@/lib/settings-types";
 import { loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
@@ -64,6 +67,7 @@ export function QuickActionFloat() {
     const [apiConfigs, setApiConfigs] = useState<ApiConfig[]>([]);
     const [worldBooks, setWorldBooks] = useState<WorldBookConfig[]>([]);
     const [characters, setCharacters] = useState<Character[]>([]);
+    const [expandedBookIds, setExpandedBookIds] = useState<Set<string>>(() => new Set());
     const [floatingPosition, setFloatingPosition] = useState<FloatingPosition | null>(null);
     const [popoverPosition, setPopoverPosition] = useState<PopoverPosition | null>(null);
     const [draggingFloatingButton, setDraggingFloatingButton] = useState(false);
@@ -117,9 +121,11 @@ export function QuickActionFloat() {
         const handleBindingsUpdated = () => reloadData();
         const handleFocus = () => reloadData();
         window.addEventListener("settings-bindings-updated", handleBindingsUpdated);
+        window.addEventListener("settings-worldbooks-updated", handleBindingsUpdated);
         window.addEventListener("focus", handleFocus);
         return () => {
             window.removeEventListener("settings-bindings-updated", handleBindingsUpdated);
+            window.removeEventListener("settings-worldbooks-updated", handleBindingsUpdated);
             window.removeEventListener("focus", handleFocus);
         };
     }, [enabled, reloadData]);
@@ -571,24 +577,129 @@ export function QuickActionFloat() {
                             {worldBooks.length === 0 ? (
                                 <div className="quick-action-empty">暂无世界书</div>
                             ) : (
-                                <div className="quick-action-chip-grid">
-                                    {worldBooks.map(book => {
-                                        const selected = selectedWorldBookIds.includes(book.id);
+                                <>
+                                    <div className="quick-action-chip-grid">
+                                        {worldBooks.map(book => {
+                                            const selected = selectedWorldBookIds.includes(book.id);
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    key={book.id}
+                                                    className="quick-action-chip"
+                                                    data-selected={selected}
+                                                    disabled={characterDisabled}
+                                                    onClick={() => toggleWorldBook(book.id)}
+                                                >
+                                                    <span>{book.name}</span>
+                                                    {selected ? <Check size={14} /> : null}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                    {/* 已生效的世界书（含本级勾选或继承全局）：支持展开并独立开关单条条目 */}
+                                    {(() => {
+                                        const effectiveBookIds = selectedWorldBookIds.length > 0
+                                            ? selectedWorldBookIds
+                                            : (scope === "character" ? (config.globalDefaults.worldBookIds || []) : []);
+                                        const effectiveBooks = effectiveBookIds
+                                            .map(id => worldBooks.find(b => b.id === id))
+                                            .filter((b): b is WorldBookConfig => Boolean(b));
+                                        if (effectiveBooks.length === 0) return null;
+                                        const entryOverrides = scope === "character"
+                                            ? getWorldBookEntryOverrides(selectedCharId)
+                                            : (config.globalWorldBookEntryOverrides ?? {});
                                         return (
-                                            <button
-                                                type="button"
-                                                key={book.id}
-                                                className="quick-action-chip"
-                                                data-selected={selected}
-                                                disabled={characterDisabled}
-                                                onClick={() => toggleWorldBook(book.id)}
-                                            >
-                                                <span>{book.name}</span>
-                                                {selected ? <Check size={14} /> : null}
-                                            </button>
+                                            <div className="flex flex-col gap-1.5 mt-2 pt-2 border-t border-black/10">
+                                                <div className="text-[11px] font-semibold opacity-70 px-0.5">
+                                                    条目独立开关（可单独为{scope === "character" ? (selectedCharacter?.name || "角色") : "全局"}开启或关闭常驻/关键词条目）
+                                                </div>
+                                                {effectiveBooks.map(book => {
+                                                    const isBookExpanded = expandedBookIds.has(book.id) || effectiveBooks.length === 1;
+                                                    return (
+                                                        <div key={`entries-${book.id}`} className="rounded-xl border border-black/10 bg-black/[0.02] overflow-hidden">
+                                                            <button
+                                                                type="button"
+                                                                className="w-full flex items-center justify-between px-2.5 py-2 text-left text-xs font-semibold"
+                                                                onClick={() => {
+                                                                    setExpandedBookIds(prev => {
+                                                                        const next = new Set(prev);
+                                                                        if (next.has(book.id)) next.delete(book.id);
+                                                                        else next.add(book.id);
+                                                                        return next;
+                                                                    });
+                                                                }}
+                                                            >
+                                                                <span className="truncate">📖 {book.name}（{book.entries.length} 条）</span>
+                                                                <ChevronDown size={14} style={{ transform: isBookExpanded ? "rotate(180deg)" : undefined, transition: "transform 0.15s" }} />
+                                                            </button>
+                                                            {isBookExpanded && (
+                                                                <div className="flex flex-col gap-1 px-2 pb-2 max-h-[210px] overflow-y-auto">
+                                                                    {book.entries.length === 0 ? (
+                                                                        <div className="text-[11px] opacity-60 py-1 text-center">该世界书暂无条目</div>
+                                                                    ) : book.entries.map(entry => {
+                                                                        const overrideKey = `${book.id}:${entry.uid}`;
+                                                                        const hasOverride = overrideKey in entryOverrides;
+                                                                        const effectiveEnabled = hasOverride ? entryOverrides[overrideKey] : !entry.disable;
+                                                                        return (
+                                                                            <div
+                                                                                key={entry.uid}
+                                                                                className="flex items-center justify-between gap-2 rounded-lg bg-[var(--c-card,#fff)] px-2 py-1.5 border border-black/5"
+                                                                            >
+                                                                                <div className="flex flex-col min-w-0 flex-1">
+                                                                                    <div className="flex items-center gap-1 min-w-0">
+                                                                                        <span className={`px-1 py-0.5 rounded text-[9px] shrink-0 font-medium ${entry.constant ? "bg-amber-500/15 text-amber-700" : "bg-emerald-500/15 text-emerald-700"}`}>
+                                                                                            {entry.constant ? "常驻" : "触发"}
+                                                                                        </span>
+                                                                                        <span className="text-[12px] font-medium truncate">
+                                                                                            {entry.comment || entry.key || "(未命名条目)"}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                    {hasOverride && (
+                                                                                        <div className="flex items-center gap-1.5 mt-0.5">
+                                                                                            <span className="text-[10px] opacity-65">
+                                                                                                已单独{effectiveEnabled ? "开启" : "关闭"}（原设:{entry.disable ? "关" : "开"}）
+                                                                                            </span>
+                                                                                            <button
+                                                                                                type="button"
+                                                                                                className="text-[10px] underline opacity-75"
+                                                                                                onClick={() => {
+                                                                                                    if (scope === "character" && selectedCharId) {
+                                                                                                        setWorldBookEntryOverride({ type: "character", characterId: selectedCharId }, book.id, entry.uid, undefined);
+                                                                                                    } else if (scope === "global") {
+                                                                                                        setWorldBookEntryOverride({ type: "global" }, book.id, entry.uid, undefined);
+                                                                                                    }
+                                                                                                    reloadData();
+                                                                                                }}
+                                                                                            >
+                                                                                                恢复原设
+                                                                                            </button>
+                                                                                        </div>
+                                                                                    )}
+                                                                                </div>
+                                                                                <Toggle
+                                                                                    checked={effectiveEnabled}
+                                                                                    disabled={characterDisabled}
+                                                                                    onChange={(nextVal) => {
+                                                                                        if (scope === "character" && selectedCharId) {
+                                                                                            setWorldBookEntryOverride({ type: "character", characterId: selectedCharId }, book.id, entry.uid, nextVal);
+                                                                                        } else if (scope === "global") {
+                                                                                            setWorldBookEntryOverride({ type: "global" }, book.id, entry.uid, nextVal);
+                                                                                        }
+                                                                                        reloadData();
+                                                                                    }}
+                                                                                />
+                                                                            </div>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
                                         );
-                                    })}
-                                </div>
+                                    })()}
+                                </>
                             )}
                         </section>
                     </div>

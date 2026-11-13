@@ -145,9 +145,12 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
     /** Group contacts by pinyin initial */
     const { grouped, indexLetters } = useMemo(() => {
         const keyword = deferredContactFilter.trim().toLowerCase();
-        const filtered = keyword
-            ? contacts.filter(c => (c.char?.name || "").toLowerCase().includes(keyword))
+        const baseContacts = (filterByIdentity && identity?.id)
+            ? contacts.filter(c => resolveUserIdentity(c.characterId, "chat")?.id === identity.id)
             : contacts;
+        const filtered = keyword
+            ? baseContacts.filter(c => (c.char?.name || "").toLowerCase().includes(keyword))
+            : baseContacts;
         const map: Record<string, typeof contacts> = {};
         for (const c of filtered) {
             const letter = getInitial(c.char?.name || "");

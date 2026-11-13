@@ -54,6 +54,30 @@ export function deleteScheme(id: string) {
 export function renameScheme(id: string, name: string) {
   const all = loadAll();
   const s = all.find(x => x.id === id);
-  if (s) s.name = name;
+  if (s && name.trim()) s.name = name.trim();
   saveAll(all);
+}
+
+/** Update scheme name and/or CSS content */
+export function updateScheme(id: string, updates: { name?: string; css?: string }): CSSScheme | null {
+  const all = loadAll();
+  const s = all.find(x => x.id === id);
+  if (!s) return null;
+  if (typeof updates.name === "string" && updates.name.trim()) s.name = updates.name.trim();
+  if (typeof updates.css === "string") s.css = updates.css;
+  saveAll(all);
+  return { ...s };
+}
+
+/** Upsert a scheme from Resource Hub or import: updates existing if same target & name, otherwise creates new */
+export function saveOrUpdateSchemeByName(target: string, name: string, css: string): CSSScheme {
+  const cleanName = name.trim() || "未命名预设";
+  const all = loadAll();
+  const existing = all.find(x => x.target === target && x.name === cleanName);
+  if (existing) {
+    existing.css = css;
+    saveAll(all);
+    return { ...existing };
+  }
+  return saveScheme(target, cleanName, css);
 }

@@ -220,7 +220,7 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
                                 )}
                             </div>
                             <div className="flex flex-col whitespace-nowrap">
-                                <span className="ts-16 font-bold text-[var(--c-text-title)] leading-tight">{getUserIdentityDisplayName(identity, "用户")}</span>
+                                <span className="ts-16 font-bold text-[var(--c-text-title)] leading-tight">{identity?.name || "用户"}</span>
                                 <div className="flex items-center gap-1 mt-1">
                                     <span className="w-[8px] h-[8px] rounded-full bg-[#2dd36f]"></span>
                                     <span className="ts-10 text-[var(--c-icon)] font-medium">在线</span>

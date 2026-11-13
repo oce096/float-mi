@@ -95,6 +95,9 @@ export type ImportDestination =
     | "chat_session_css"
     | "chat_app_css"
     | "global_css"
+    | "story_css"
+    | "music_css"
+    | "calendar_css"
     | "custom_app"
     | "game"
     | "theater"
@@ -109,9 +112,12 @@ export const IMPORT_DESTINATIONS: Array<{ key: ImportDestination; label: string;
     { key: "regex", label: "正则", hint: "正则管理页导出的 JSON" },
     { key: "worldbook", label: "世界书", hint: "世界书管理页导出的 JSON" },
     { key: "character", label: "角色卡", hint: "角色卡 JSON 或 PNG" },
-    { key: "chat_session_css", label: "聊天室CSS", hint: "需选择应用到哪个角色" },
-    { key: "chat_app_css", label: "聊天主页CSS", hint: "应用到聊天主页" },
-    { key: "global_css", label: "全局CSS", hint: "应用到外观页全局样式" },
+    { key: "chat_session_css", label: "聊天室CSS", hint: "需选择应用到哪个角色，并存入美化预设" },
+    { key: "chat_app_css", label: "聊天全局CSS", hint: "应用到聊天主页，并存入美化预设" },
+    { key: "global_css", label: "全局CSS", hint: "应用到外观页全局样式，并存入美化预设" },
+    { key: "story_css", label: "剧情CSS", hint: "应用到角色剧情页，并存入剧情美化预设" },
+    { key: "music_css", label: "音乐CSS", hint: "应用到音乐 App，并存入音乐美化预设" },
+    { key: "calendar_css", label: "日历CSS", hint: "应用到日历 App，并存入日历美化预设" },
     { key: "custom_app", label: "应用", hint: "应用市场 zip 安装包或单 HTML" },
     { key: "game", label: "游戏", hint: "游戏草稿箱导出的 JSON，导入后进我的柜子直接可玩" },
     { key: "theater", label: "黑市剧场", hint: "剧场草稿箱导出的 JSON，导入后进本地暗柜直接开演" },

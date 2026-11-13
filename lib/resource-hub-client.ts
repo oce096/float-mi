@@ -19,7 +19,7 @@ import {
     loadWorldBooks, saveWorldBooks, parseWorldBookFromJson,
     loadRegexes, saveRegexes, parseRegexFromJson,
 } from "./settings-storage";
-import { saveScheme } from "./css-scheme-storage";
+import { saveScheme, saveOrUpdateSchemeByName } from "./css-scheme-storage";
 import { STATUS_REGION_SCHEME_TARGET } from "./chat-status-region";
 import { createOrGetSession, loadChatSessions, saveChatSessions } from "./chat-storage";
 import { readThemeProfile, writeThemeProfile } from "./theme-storage";
@@ -335,6 +335,9 @@ export function checkImportFileForDestination(destination: ImportDestination, pa
         case "chat_session_css":
         case "chat_app_css":
         case "global_css":
+        case "story_css":
+        case "music_css":
+        case "calendar_css":
             return lower.endsWith(".css") || lower.endsWith(".txt") ? null : "CSS 目的地需要 .css 或 .txt 文件";
         case "custom_app":
             return lower.endsWith(".zip") || lower.endsWith(".html") || lower.endsWith(".htm") ? null : "应用需要 zip 安装包或单 HTML 文件";
@@ -435,6 +438,7 @@ export async function importResourceHubFile(
     options?: {
         contactId?: string;
         authorName?: string;
+        entryTitle?: string;
         /**
          * 特调材料里夹着信任模式机括（不进沙盒、直接在页面里跑）时，落库前先问用户。
          * 收到名单，返回 true 才继续；没传这个回调就一律拒绝，别静默放行。
@@ -510,28 +514,66 @@ export async function importResourceHubFile(
         }
         case "chat_session_css": {
             const contactId = options?.contactId;
-            if (!contactId) throw new Error("请选择要应用的角色");
             const css = await fetchResourceHubText(source, path);
+            const presetName = options?.entryTitle?.trim() ? `${options.entryTitle.trim()} (${displayName})` : displayName;
+            saveOrUpdateSchemeByName("chat_session", presetName, css);
+            if (!contactId) {
+                return `聊天室 CSS 已存入美化预设「${presetName}」`;
+            }
             const session = createOrGetSession(contactId);
             const sessions = loadChatSessions().map(s => s.id === session.id ? { ...s, customCSS: css } : s);
             saveChatSessions(sessions);
             window.dispatchEvent(new CustomEvent("chat-session-css-updated", { detail: { sessionId: session.id, css } }));
-            saveScheme("chat_session", displayName, css);
-            return `聊天室 CSS 已应用，并存入方案库「${displayName}」`;
+            return `聊天室 CSS 已应用，并同步存为美化预设「${presetName}」`;
         }
         case "chat_app_css": {
             const css = await fetchResourceHubText(source, path);
+            const presetName = options?.entryTitle?.trim() ? `${options.entryTitle.trim()} (${displayName})` : displayName;
             kvSet(CHAT_APP_CSS_KEY, css);
             window.dispatchEvent(new CustomEvent("chat-app-css-updated"));
-            saveScheme("chat_app", displayName, css);
-            return `聊天主页 CSS 已应用，并存入方案库「${displayName}」`;
+            saveOrUpdateSchemeByName("chat_app", presetName, css);
+            return `聊天全局 CSS 已应用，并存为美化预设「${presetName}」`;
         }
         case "global_css": {
             const css = await fetchResourceHubText(source, path);
+            const presetName = options?.entryTitle?.trim() ? `${options.entryTitle.trim()} (${displayName})` : displayName;
             writeThemeProfile({ ...readThemeProfile(), globalCustomCSS: css });
             window.dispatchEvent(new CustomEvent("theme-css-updated"));
-            saveScheme("global", displayName, css);
-            return `全局 CSS 已应用（外观页可调整），并存入方案库「${displayName}」`;
+            saveOrUpdateSchemeByName("global", presetName, css);
+            return `全局 CSS 已应用（外观页可调整），并存为美化预设「${presetName}」`;
+        }
+        case "story_css": {
+            const css = await fetchResourceHubText(source, path);
+            const presetName = options?.entryTitle?.trim() ? `${options.entryTitle.trim()} (${displayName})` : displayName;
+            saveOrUpdateSchemeByName("story", presetName, css);
+            if (options?.contactId) {
+                const { hydrateStoryStorage, createOrGetStorySession, updateStorySession } = await import("./story-storage");
+                await hydrateStoryStorage();
+                const chars = loadCharacters();
+                const char = chars.find(c => c.id === options.contactId);
+                if (char) {
+                    const sess = createOrGetStorySession(char.id, char.name);
+                    updateStorySession(sess.id, { customCSS: css });
+                    return `剧情 CSS 已应用到「${char.name}」，并存为美化预设「${presetName}」`;
+                }
+            }
+            return `剧情 CSS 已存为美化预设「${presetName}」，可在剧情右上角画笔菜单中一键选用`;
+        }
+        case "music_css": {
+            const css = await fetchResourceHubText(source, path);
+            const presetName = options?.entryTitle?.trim() ? `${options.entryTitle.trim()} (${displayName})` : displayName;
+            kvSet("music-custom-css", css);
+            window.dispatchEvent(new CustomEvent("music-css-change", { detail: css }));
+            saveOrUpdateSchemeByName("music", presetName, css);
+            return `音乐 CSS 已应用，并存为美化预设「${presetName}」`;
+        }
+        case "calendar_css": {
+            const css = await fetchResourceHubText(source, path);
+            const presetName = options?.entryTitle?.trim() ? `${options.entryTitle.trim()} (${displayName})` : displayName;
+            kvSet("calendar-custom-css", css);
+            window.dispatchEvent(new CustomEvent("calendar-css-updated", { detail: css }));
+            saveOrUpdateSchemeByName("calendar", presetName, css);
+            return `日历 CSS 已应用，并存为美化预设「${presetName}」`;
         }
         case "custom_app": {
             const buffer = await fetchResourceHubBinary(source, path);

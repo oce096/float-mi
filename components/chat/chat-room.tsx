@@ -459,6 +459,8 @@ type ChatRoomProps = {
     onBack: () => void;
     /** 会话在设置页被删除后回调：由外层卸载本聊天室并回到列表 */
     onDeleted?: () => void;
+    /** 独立「线下」App 挂载时强制常驻线下模式 */
+    forceOffline?: boolean;
 };
 
 type OfflineActionTarget = {
@@ -1077,7 +1079,7 @@ const OfflineTextInputBar = memo(forwardRef<OfflineTextInputHandle, {
     );
 }));
 
-export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
+export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: ChatRoomProps) {
     const [liveCSS, setLiveCSS] = useState(session.customCSS || "");
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [transientMessages, setTransientMessages] = useState<ChatMessage[]>([]);
@@ -1087,7 +1089,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         return chars.find(c => c.id === session.contactId) || null;
     });
     const [isGenerating, setIsGenerating] = useState(false);
-    const [offlineMode, setOfflineMode] = useState(false);
+    const [offlineMode, setOfflineMode] = useState(() => forceOffline);
     const [theaterMode, setTheaterMode] = useState(() => kvGet(CHAT_THEATER_MODE_PREFIX + session.id) === "1");
     const [offlineTurns, setOfflineTurns] = useState<ChatOfflineTurn[]>([]);
     const [offlineVisibleCount, setOfflineVisibleCount] = useState(OFFLINE_INITIAL_LOAD);
@@ -1728,7 +1730,7 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     useEffect(() => {
         setUserIdentity(resolveUserIdentity(session.isGroup ? session.participantIds?.[0] : session.contactId, session.isGroup ? "group_chat" : "chat", session.userIdentityId));
         setTransientMessages([]);
-        setOfflineMode(kvGet(CHAT_OFFLINE_MODE_PREFIX + session.id) === "1");
+        setOfflineMode(forceOffline ? true : kvGet(CHAT_OFFLINE_MODE_PREFIX + session.id) === "1");
         setOfflineVisibleCount(OFFLINE_INITIAL_LOAD);
         offlineTextInputRef.current?.clear();
         setPendingOfflineUserText("");
@@ -4099,6 +4101,10 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
     };
 
     const toggleOfflineMode = () => {
+        if (forceOffline) {
+            onBack();
+            return;
+        }
         if (!offlineMode && isGenerating) {
             showChatToast("请先等待对方回复");
             return;

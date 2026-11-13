@@ -50,6 +50,7 @@ import {
     loadWorldBooks,
     loadRegexes,
     resolveUserIdentity,
+    applyWorldBookEntryOverrides,
 } from "./settings-storage";
 import {
     assembleGroupPromptPayload,
@@ -346,9 +347,10 @@ async function buildGroupChatPromptMessages(
         const scheduleSummary = buildCalendarScheduleMarker("character", charId, getWeekStartIso(now));
         const currentSchedule = getCurrentCalendarScheduleForPrompt("character", charId, now);
         const charSlot = resolveBinding(bindings, charId, "group_chat");
-        const worldBooks = promptProfile?.enableWorldBooks === false
+        const rawWorldBooks = promptProfile?.enableWorldBooks === false
             ? []
             : (charSlot.worldBookIds || []).map(id => allWorldBooks.find(w => w.id === id)).filter(Boolean) as typeof allWorldBooks;
+        const worldBooks = applyWorldBookEntryOverrides(rawWorldBooks, charId);
         const { wbActivationContext } = prepareShortTermContext(charId, "group_chat", {
             userName,
             excludeGroupSessionId: isOfflineMode ? undefined : session.id,

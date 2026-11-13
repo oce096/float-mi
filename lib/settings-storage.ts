@@ -1050,6 +1050,61 @@ export function resolveBinding(
     return resolved;
 }
 
+/** 读取世界书单条目开关覆写表（characterId 存在时合并全局与角色覆写，角色优先） */
+export function getWorldBookEntryOverrides(characterId?: string): Record<string, boolean> {
+    const config = loadBindingConfig();
+    const globalMap = config.globalWorldBookEntryOverrides ?? {};
+    if (!characterId) return { ...globalMap };
+    const charMap = config.characterBindings.find(b => b.characterId === characterId)?.worldBookEntryOverrides ?? {};
+    return { ...globalMap, ...charMap };
+}
+
+/** 设置世界书单条目的启用覆写（支持即使条目原本 disable=true 也能为角色单独打开） */
+export function setWorldBookEntryOverride(
+    scope: { type: "global" } | { type: "character"; characterId: string },
+    worldBookId: string,
+    entryUid: string,
+    enabled: boolean | undefined,
+): void {
+    const config = loadBindingConfig();
+    const key = `${worldBookId}:${entryUid}`;
+    if (scope.type === "global") {
+        const nextMap = { ...(config.globalWorldBookEntryOverrides ?? {}) };
+        if (enabled === undefined) delete nextMap[key];
+        else nextMap[key] = enabled;
+        saveBindingConfig({
+            ...config,
+            globalWorldBookEntryOverrides: Object.keys(nextMap).length > 0 ? nextMap : undefined,
+        });
+        return;
+    }
+    const binding = getCharacterBinding(config, scope.characterId);
+    const nextMap = { ...(binding.worldBookEntryOverrides ?? {}) };
+    if (enabled === undefined) delete nextMap[key];
+    else nextMap[key] = enabled;
+    saveBindingConfig(setCharacterBinding(config, {
+        ...binding,
+        worldBookEntryOverrides: Object.keys(nextMap).length > 0 ? nextMap : undefined,
+    }));
+}
+
+/** 将世界书单条目开关覆写应用到世界书列表（供组装提示词时调用） */
+export function applyWorldBookEntryOverrides(
+    worldBooks: WorldBookConfig[],
+    characterId?: string,
+): WorldBookConfig[] {
+    const overrides = getWorldBookEntryOverrides(characterId);
+    if (Object.keys(overrides).length === 0) return worldBooks;
+    return worldBooks.map(wb => ({
+        ...wb,
+        entries: wb.entries.map(entry => {
+            const key = `${wb.id}:${entry.uid}`;
+            if (!(key in overrides)) return entry;
+            return { ...entry, disable: !overrides[key] };
+        }),
+    }));
+}
+
 /**
  * Resolve auxiliary API config for system features.
  * Falls back to global default apiConfigId if not explicitly set.
