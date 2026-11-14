@@ -46,6 +46,7 @@ import { deleteWeixinCloudMessagesFromCloud, emitWeixinSyncToast, syncAllWeixinB
 import { loadBindingConfig, loadPresets, loadRegexes, resolveBinding, resolveUserIdentity } from "@/lib/settings-storage";
 import { generateGroupChatCompletion, generateGroupOfflineChatCompletion, parseGroupChatResponse, buildEditableGroupRoundText } from "@/lib/group-chat-engine";
 import { appendChatOfflineTurn, deleteChatOfflineTurn, deleteChatOfflineTurnsFrom, extractThinkingTag, loadChatOfflineTurns, parseOfflineResponse, saveChatOfflineTurns, updateChatOfflineTurn, type ChatOfflineTurn } from "@/lib/chat-offline-storage";
+import { loadOfflineSessionConfig, OFFLINE_STUDIO_UPDATED_EVENT } from "@/lib/offline-studio-storage";
 import { applyDisplayRegex, applyEditRegex } from "@/lib/llm-prompt-assembler";
 import { scheduleFollowUp, cancelFollowUp, cancelBackgroundGeneration, isBackgroundReplyGenerating } from "@/lib/follow-up-service";
 import { useKeyboardDismissAutoSend } from "@/components/chat/use-keyboard-dismiss-auto-send";
@@ -1594,19 +1595,21 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
         const bindings = loadBindingConfig();
         const slot = resolveBinding(bindings, session.isGroup ? undefined : session.contactId, session.isGroup ? "group_chat" : "chat");
         const preset = loadPresets().find(item => item.id === slot.presetId) || null;
+        const studioCfg = loadOfflineSessionConfig(session.id);
         const withThoughtCompat = (tag: string): string[] => (tag === "thinking" ? ["thinking", "thought", "think"] : [tag]);
+        const offlineTag = studioCfg.cotEnabled
+            ? (studioCfg.cotTag?.trim() || "thinking")
+            : (preset?.offline_thinking_enabled === true ? (preset.thinking_tag?.trim() || "thinking") : "");
         return {
             online: preset?.online_thinking_enabled === true
                 ? withThoughtCompat(preset.online_thinking_tag?.trim() || "thinking")
                 : [],
-            offlineThinking: preset?.offline_thinking_enabled === true
-                ? withThoughtCompat(preset.thinking_tag?.trim() || "thinking")
-                : [],
+            offlineThinking: offlineTag ? withThoughtCompat(offlineTag) : [],
             summaryTag: preset?.story_summary_tag?.trim() || "summary",
             // 预设「剔除文本」：引擎最终会删，预览阶段同步删，避免闪现（字面量删除，成本极低）
             stripTexts: (preset?.strip_texts || []).filter(Boolean),
         };
-    }, [regexRevision, session.contactId, session.isGroup]);
+    }, [regexRevision, session.id, session.contactId, session.isGroup]);
 
     const displayRegexMacroEngine = useMemo(() => {
         const charName = session.isGroup
@@ -1714,11 +1717,13 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
         window.addEventListener("settings-bindings-updated", refreshRegexes);
         window.addEventListener("settings-identities-updated", refreshRegexes);
         window.addEventListener("settings-presets-updated", refreshRegexes);
+        window.addEventListener(OFFLINE_STUDIO_UPDATED_EVENT, refreshRegexes);
         return () => {
             window.removeEventListener("settings-regexes-updated", refreshRegexes);
             window.removeEventListener("settings-bindings-updated", refreshRegexes);
             window.removeEventListener("settings-identities-updated", refreshRegexes);
             window.removeEventListener("settings-presets-updated", refreshRegexes);
+            window.removeEventListener(OFFLINE_STUDIO_UPDATED_EVENT, refreshRegexes);
         };
     }, [session.contactId, session.isGroup, session.participantIds, session.userIdentityId]);
 

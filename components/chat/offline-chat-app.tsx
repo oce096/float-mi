@@ -1,19 +1,45 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { ChevronLeft, MapPin, MessageSquare, Palette, Plus, Users, User } from "lucide-react";
+import {
+    BookOpen,
+    Brain,
+    Check,
+    ChevronDown,
+    ChevronLeft,
+    Feather,
+    Loader2,
+    MapPin,
+    Palette,
+    Plus,
+    Save,
+    SlidersHorizontal,
+    Sparkles,
+    Trash2,
+    User,
+    Users,
+    X,
+} from "lucide-react";
 import {
     hydrateChatStorage,
     loadChatSessions,
-    loadChatContacts,
     createOrGetSession,
     CHAT_APP_SETTINGS_UPDATED_EVENT,
     loadChatAppSettings,
+    saveChatAppSettings,
     type ChatSession,
 } from "@/lib/chat-storage";
 import { loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
-import { resolveUserIdentity, loadUserIdentities, loadBindingConfig, saveBindingConfig } from "@/lib/settings-storage";
+import {
+    resolveUserIdentity,
+    loadUserIdentities,
+    loadBindingConfig,
+    saveBindingConfig,
+    loadWorldBooks,
+    resolveBinding,
+} from "@/lib/settings-storage";
+import type { WorldBookConfig } from "@/lib/settings-types";
 import { getUserIdentityDisplayName, type UserIdentity } from "@/components/settings/user-identity";
 import { getLastChatOfflineTurn, getChatOfflineTurnPreview, loadChatOfflineTurns } from "@/lib/chat-offline-storage";
 import { formatChatUiTime } from "@/lib/chat-time";
@@ -24,7 +50,23 @@ import { SessionCustomCSS } from "@/components/ui/session-custom-css";
 import CSSSchemeBar from "@/components/ui/css-scheme-picker";
 import { CHAT_APP_CSS_EXAMPLE } from "@/lib/css-examples";
 import { kvGet, kvSet, kvRemove } from "@/lib/kv-db";
-import { Toggle } from "@/components/ui/form";
+import { Toggle, Input } from "@/components/ui/form";
+import { runSummarizationPipeline } from "@/lib/memory-summarizer";
+import {
+    loadOfflineSessionConfig,
+    saveOfflineSessionConfig,
+    loadOfflineCotPresets,
+    upsertOfflineCotPreset,
+    deleteOfflineCotPreset,
+    loadOfflineStylePresets,
+    upsertOfflineStylePreset,
+    deleteOfflineStylePreset,
+    DEFAULT_COT_PRESETS,
+    DEFAULT_STYLE_PRESETS,
+    OFFLINE_STUDIO_UPDATED_EVENT,
+    type OfflineSessionStudioConfig,
+    type OfflineTextPreset,
+} from "@/lib/offline-studio-storage";
 
 const OFFLINE_APP_CSS_KEY = "offline-app-custom-css";
 
@@ -36,6 +78,511 @@ function doesSessionMatchIdentity(session: ChatSession, activeIdentityId?: strin
         return memberIds.length === 0 || memberIds.some(cid => resolveUserIdentity(cid, "chat")?.id === activeIdentityId);
     }
     return resolveUserIdentity(session.contactId, "chat")?.id === activeIdentityId;
+}
+
+/**
+ * 线下会话内的「场记悬浮球」与控制台：
+ * - 独立世界书与单条条目开关（与线上完全分开）
+ * - 自定义折叠思维链 + 预设保存/切换
+ * - 自定义叙事文风 + 预设保存/切换
+ * - 一键触发线上同款长期记忆总结
+ */
+function OfflineStudioDrawer({
+    session,
+    character,
+    onClose,
+    onToast,
+}: {
+    session: ChatSession;
+    character: Character | null;
+    onClose: () => void;
+    onToast: (msg: string) => void;
+}) {
+    const [studioTab, setStudioTab] = useState<"worldbook" | "cot" | "style" | "summary">("worldbook");
+    const [cfg, setCfg] = useState<OfflineSessionStudioConfig>(() => loadOfflineSessionConfig(session.id));
+    const [worldBooks, setWorldBooks] = useState<WorldBookConfig[]>(() => loadWorldBooks());
+    const [expandedBookIds, setExpandedBookIds] = useState<Set<string>>(() => new Set());
+
+    // 思维链预设状态
+    const [cotPresets, setCotPresets] = useState<OfflineTextPreset[]>(() => loadOfflineCotPresets());
+    const [cotNameDraft, setCotNameDraft] = useState("");
+
+    // 文风预设状态
+    const [stylePresets, setStylePresets] = useState<OfflineTextPreset[]>(() => loadOfflineStylePresets());
+    const [styleNameDraft, setStyleNameDraft] = useState("");
+
+    // 记忆总结状态
+    const [summarizing, setSummarizing] = useState(false);
+    const [summaryResult, setSummaryResult] = useState<string | null>(null);
+
+    const updateCfg = (patch: Partial<OfflineSessionStudioConfig>) => {
+        const next = { ...cfg, ...patch };
+        setCfg(next);
+        saveOfflineSessionConfig(session.id, next);
+    };
+
+    // 切换开启独立世界书时，首次默认把角色原绑定的世界书拷过来当初始勾选，免去从零勾起
+    const toggleIndependentWb = (enabled: boolean) => {
+        if (enabled && (!cfg.worldBookIds || cfg.worldBookIds.length === 0)) {
+            const boundSlot = resolveBinding(
+                loadBindingConfig(),
+                session.isGroup ? session.participantIds?.[0] : session.contactId,
+                session.isGroup ? "group_chat" : "chat",
+            );
+            updateCfg({
+                useIndependentWorldBooks: true,
+                worldBookIds: boundSlot.worldBookIds ? [...boundSlot.worldBookIds] : [],
+            });
+            return;
+        }
+        updateCfg({ useIndependentWorldBooks: enabled });
+    };
+
+    const selectedWbIds = cfg.worldBookIds || [];
+    const entryOverrides = cfg.worldBookEntryOverrides || {};
+
+    const toggleWorldBook = (wbId: string) => {
+        const next = selectedWbIds.includes(wbId)
+            ? selectedWbIds.filter(id => id !== wbId)
+            : [...selectedWbIds, wbId];
+        updateCfg({ useIndependentWorldBooks: true, worldBookIds: next });
+    };
+
+    const toggleEntryOverride = (wbId: string, entryUid: string, defaultEnabled: boolean) => {
+        const key = `${wbId}:${entryUid}`;
+        const currentEffective = key in entryOverrides ? entryOverrides[key] : defaultEnabled;
+        const nextMap = { ...entryOverrides, [key]: !currentEffective };
+        updateCfg({ useIndependentWorldBooks: true, worldBookEntryOverrides: nextMap });
+    };
+
+    const handleRunSummary = async (force: boolean) => {
+        const targetIds = session.isGroup ? (session.participantIds || []) : [session.contactId];
+        if (targetIds.length === 0) return;
+        setSummarizing(true);
+        setSummaryResult(null);
+        try {
+            const chars = loadCharacters();
+            const messages: string[] = [];
+            for (const cid of targetIds) {
+                const c = chars.find(item => item.id === cid);
+                if (!c) continue;
+                const res = await runSummarizationPipeline(c.id, c.name, { force });
+                messages.push(`${c.name}：${res.success ? "已生成长期记忆总结并写入记忆库" : (res.error || "无需总结")}`);
+            }
+            const msg = messages.join("；");
+            setSummaryResult(msg);
+            onToast(msg);
+        } catch (err: any) {
+            setSummaryResult(`总结失败：${err?.message || String(err)}`);
+        } finally {
+            setSummarizing(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-[10050] flex items-end justify-center bg-black/45 backdrop-blur-[2px] sm:items-center" onClick={onClose}>
+            <div
+                className="flex max-h-[84vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-[var(--c-page-body-bg)] text-[var(--c-text)] shadow-2xl sm:rounded-3xl border border-black/10"
+                onClick={e => e.stopPropagation()}
+            >
+                {/* 头部 */}
+                <div className="flex items-center justify-between px-5 pt-4 pb-2.5 border-b border-black/5">
+                    <div className="flex flex-col">
+                        <span className="font-mono text-[10px] tracking-[0.18em] text-[var(--c-icon)] uppercase">OFFLINE STUDIO</span>
+                        <span className="ts-16 font-bold text-[var(--c-text-title)]">
+                            线下场记台 · {session.isGroup ? (session.groupName || "群聊") : (character?.name || "角色")}
+                        </span>
+                    </div>
+                    <button type="button" onClick={onClose} className="w-8 h-8 rounded-full bg-black/5 flex items-center justify-center text-[var(--c-text)]">
+                        <X size={16} />
+                    </button>
+                </div>
+
+                {/* 分栏导航 */}
+                <div className="grid grid-cols-4 gap-1.5 px-4 py-2.5 bg-[var(--c-card)]/60 border-b border-black/5">
+                    {([
+                        { id: "worldbook", label: "世界书", icon: BookOpen, activeDot: Boolean(cfg.useIndependentWorldBooks) },
+                        { id: "cot", label: "思维链", icon: Brain, activeDot: Boolean(cfg.cotEnabled) },
+                        { id: "style", label: "文风", icon: Feather, activeDot: Boolean(cfg.styleEnabled) },
+                        { id: "summary", label: "记忆总结", icon: Sparkles, activeDot: false },
+                    ] as const).map(item => {
+                        const Icon = item.icon;
+                        const active = studioTab === item.id;
+                        return (
+                            <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => setStudioTab(item.id)}
+                                className={`relative flex flex-col items-center justify-center gap-1 py-2 rounded-xl ts-11 font-semibold transition-all ${
+                                    active ? "bg-black text-white shadow-sm" : "bg-[var(--c-input)] text-[var(--c-text)] opacity-80"
+                                }`}
+                            >
+                                <Icon size={15} />
+                                <span>{item.label}</span>
+                                {item.activeDot && (
+                                    <span className={`absolute top-1.5 right-2 w-1.5 h-1.5 rounded-full ${active ? "bg-emerald-400" : "bg-emerald-500"}`} />
+                                )}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {/* 主体内容 */}
+                <div className="flex-1 overflow-y-auto px-4 py-3.5 flex flex-col gap-3.5">
+                    {studioTab === "worldbook" && (
+                        <>
+                            <div className="flex items-center justify-between rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5">
+                                <div className="flex flex-col gap-0.5 pr-3">
+                                    <span className="ts-14 font-bold text-[var(--c-text-title)]">线下独立世界书配置</span>
+                                    <span className="ts-11 text-[var(--c-icon)]">
+                                        开启后仅对本场线下生效，与线上聊天/全局悬浮球完全隔离互不影响
+                                    </span>
+                                </div>
+                                <Toggle checked={Boolean(cfg.useIndependentWorldBooks)} onChange={toggleIndependentWb} />
+                            </div>
+
+                            {worldBooks.length === 0 ? (
+                                <div className="py-8 text-center ts-12 text-[var(--c-icon)]">尚未创建任何世界书</div>
+                            ) : (
+                                <div className="flex flex-col gap-2">
+                                    {worldBooks.map(wb => {
+                                        const checked = selectedWbIds.includes(wb.id);
+                                        const expanded = expandedBookIds.has(wb.id);
+                                        return (
+                                            <div key={wb.id} className="rounded-2xl bg-[var(--c-card)] border border-black/5 overflow-hidden">
+                                                <div className="flex items-center justify-between px-3.5 py-2.5 gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => toggleWorldBook(wb.id)}
+                                                        className="flex items-center gap-2.5 min-w-0 flex-1 text-left"
+                                                    >
+                                                        <span className={`w-5 h-5 rounded-md flex items-center justify-center border transition-all shrink-0 ${checked ? "bg-black border-black text-white" : "border-black/20 bg-transparent"}`}>
+                                                            {checked && <Check size={13} />}
+                                                        </span>
+                                                        <div className="flex flex-col min-w-0 flex-1">
+                                                            <span className="ts-13 font-bold text-[var(--c-text-title)] truncate">{wb.name}</span>
+                                                            <span className="ts-10 text-[var(--c-icon)]">{wb.entries.length} 个条目</span>
+                                                        </div>
+                                                    </button>
+                                                    {wb.entries.length > 0 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setExpandedBookIds(prev => {
+                                                                    const next = new Set(prev);
+                                                                    if (next.has(wb.id)) next.delete(wb.id);
+                                                                    else next.add(wb.id);
+                                                                    return next;
+                                                                });
+                                                            }}
+                                                            className="px-2 py-1 rounded-lg bg-[var(--c-input)] ts-11 text-[var(--c-text)] flex items-center gap-1 shrink-0"
+                                                        >
+                                                            <span>条目</span>
+                                                            <ChevronDown size={13} className={expanded ? "rotate-180 transition-transform" : "transition-transform"} />
+                                                        </button>
+                                                    )}
+                                                </div>
+
+                                                {expanded && wb.entries.length > 0 && (
+                                                    <div className="border-t border-black/5 bg-[var(--c-input)]/50 px-3 py-2 flex flex-col gap-1.5 max-h-[220px] overflow-y-auto">
+                                                        {wb.entries.map(entry => {
+                                                            const key = `${wb.id}:${entry.uid}`;
+                                                            const hasOverride = key in entryOverrides;
+                                                            const effectiveOn = hasOverride ? entryOverrides[key] : !entry.disable;
+                                                            return (
+                                                                <div key={entry.uid} className="flex items-center justify-between gap-2 rounded-xl bg-[var(--c-card)] px-2.5 py-1.5">
+                                                                    <div className="flex flex-col min-w-0 flex-1">
+                                                                        <div className="flex items-center gap-1.5">
+                                                                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono shrink-0 ${entry.constant ? "bg-blue-500/15 text-blue-600" : "bg-amber-500/15 text-amber-600"}`}>
+                                                                                {entry.constant ? "常驻" : "关键词"}
+                                                                            </span>
+                                                                            <span className="ts-12 font-medium text-[var(--c-text-title)] truncate">
+                                                                                {entry.comment || entry.key || "未命名条目"}
+                                                                            </span>
+                                                                        </div>
+                                                                        {hasOverride && (
+                                                                            <span className="text-[10px] text-[var(--c-icon)]">
+                                                                                线下已单独{effectiveOn ? "开启" : "关闭"}
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                    <Toggle
+                                                                        checked={effectiveOn}
+                                                                        onChange={() => toggleEntryOverride(wb.id, entry.uid, !entry.disable)}
+                                                                    />
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </>
+                    )}
+
+                    {studioTab === "cot" && (
+                        <>
+                            <div className="flex items-center justify-between rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5">
+                                <div className="flex flex-col gap-0.5 pr-3">
+                                    <span className="ts-14 font-bold text-[var(--c-text-title)]">启用折叠思维链推演</span>
+                                    <span className="ts-11 text-[var(--c-icon)]">
+                                        每次回复前按你的思维链指令推演心理与细节，并在角色回复顶部生成可点击展开的折叠思考条
+                                    </span>
+                                </div>
+                                <Toggle
+                                    checked={Boolean(cfg.cotEnabled)}
+                                    onChange={enabled => {
+                                        updateCfg({
+                                            cotEnabled: enabled,
+                                            cotPrompt: cfg.cotPrompt || DEFAULT_COT_PRESETS[0].content,
+                                            cotTag: cfg.cotTag || "thinking",
+                                        });
+                                    }}
+                                />
+                            </div>
+
+                            <div className="rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5 flex flex-col gap-2.5">
+                                <div className="flex items-center justify-between">
+                                    <span className="ts-12 font-bold text-[var(--c-text-title)]">思维链预设库</span>
+                                    <span className="ts-10 text-[var(--c-icon)]">点击切换 · 可保存新预设</span>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {cotPresets.map(p => {
+                                        const active = cfg.cotPresetId === p.id;
+                                        return (
+                                            <div key={p.id} className="inline-flex items-center rounded-full overflow-hidden border border-black/10">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        updateCfg({
+                                                            cotEnabled: true,
+                                                            cotPresetId: p.id,
+                                                            cotPrompt: p.content,
+                                                            cotTag: p.tag || "thinking",
+                                                        });
+                                                        setCotNameDraft(p.name);
+                                                    }}
+                                                    className={`px-3 py-1 ts-11 font-medium transition-all ${active ? "bg-black text-white" : "bg-[var(--c-input)] text-[var(--c-text)]"}`}
+                                                >
+                                                    {p.name}
+                                                </button>
+                                                {!p.builtIn && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            deleteOfflineCotPreset(p.id);
+                                                            setCotPresets(loadOfflineCotPresets());
+                                                        }}
+                                                        className="px-1.5 py-1 bg-[var(--c-input)] text-[var(--c-danger)] hover:bg-red-500/10"
+                                                        title="删除预设"
+                                                    >
+                                                        <Trash2 size={11} />
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                <div className="flex items-center gap-2 pt-1">
+                                    <span className="ts-11 text-[var(--c-icon)] shrink-0">包裹标签名</span>
+                                    <Input
+                                        type="text"
+                                        value={cfg.cotTag || "thinking"}
+                                        onChange={e => updateCfg({ cotTag: e.target.value })}
+                                        placeholder="thinking"
+                                        className="font-mono ts-12 py-1"
+                                    />
+                                </div>
+
+                                <textarea
+                                    value={cfg.cotPrompt ?? DEFAULT_COT_PRESETS[0].content}
+                                    onChange={e => updateCfg({ cotPrompt: e.target.value })}
+                                    rows={6}
+                                    placeholder="输入让角色在每次回复前思考推演的具体维度..."
+                                    className="ui-textarea ts-12 leading-relaxed"
+                                />
+
+                                <div className="flex items-center gap-2 pt-1">
+                                    <Input
+                                        type="text"
+                                        value={cotNameDraft}
+                                        onChange={e => setCotNameDraft(e.target.value)}
+                                        placeholder="输入预设名称以保存/覆盖..."
+                                        className="flex-1 ts-12"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const name = cotNameDraft.trim() || "我的思维链";
+                                            const existingSameName = cotPresets.find(x => x.name === name && !x.builtIn);
+                                            const saved = upsertOfflineCotPreset({
+                                                id: existingSameName?.id,
+                                                name,
+                                                content: cfg.cotPrompt || DEFAULT_COT_PRESETS[0].content,
+                                                tag: cfg.cotTag || "thinking",
+                                            });
+                                            setCotPresets(loadOfflineCotPresets());
+                                            updateCfg({ cotPresetId: saved.id, cotEnabled: true });
+                                            onToast(`已保存思维链预设「${saved.name}」`);
+                                        }}
+                                        className="ui-btn ui-btn-primary px-3 py-2 rounded-xl ts-12 shrink-0 flex items-center gap-1"
+                                    >
+                                        <Save size={14} />
+                                        保存预设
+                                    </button>
+                                </div>
+                            </div>
+                        </>
+                    )}
+
+                    {studioTab === "style" && (
+                        <>
+                            <div className="flex items-center justify-between rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5">
+                                <div className="flex flex-col gap-0.5 pr-3">
+                                    <span className="ts-14 font-bold text-[var(--c-text-title)]">启用线下专属文风</span>
+                                    <span className="ts-11 text-[var(--c-icon)]">
+                                        约束线下叙事的笔触、镜头感、句式节奏与对白质感，支持存为预设随时切换
+                                    </span>
+                                </div>
+                                <Toggle
+                                    checked={Boolean(cfg.styleEnabled)}
+                                    onChange={enabled => {
+                                        updateCfg({
+                                            styleEnabled: enabled,
+                                            stylePrompt: cfg.stylePrompt || DEFAULT_STYLE_PRESETS[0].content,
+                                        });
+                                    }}
+                                />
+                            </div>
+
+                            <div className="rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5 flex flex-col gap-2.5">
+                                <div className="flex items-center justify-between">
+                                    <span className="ts-12 font-bold text-[var(--c-text-title)]">文风预设库</span>
+                                    <span className="ts-10 text-[var(--c-icon)]">点击即应用</span>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {stylePresets.map(p => {
+                                        const active = cfg.stylePresetId === p.id;
+                                        return (
+                                            <div key={p.id} className="inline-flex items-center rounded-full overflow-hidden border border-black/10">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        updateCfg({
+                                                            styleEnabled: true,
+                                                            stylePresetId: p.id,
+                                                            stylePrompt: p.content,
+                                                        });
+                                                        setStyleNameDraft(p.name);
+                                                    }}
+                                                    className={`px-3 py-1 ts-11 font-medium transition-all ${active ? "bg-black text-white" : "bg-[var(--c-input)] text-[var(--c-text)]"}`}
+                                                >
+                                                    {p.name}
+                                                </button>
+                                                {!p.builtIn && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            deleteOfflineStylePreset(p.id);
+                                                            setStylePresets(loadOfflineStylePresets());
+                                                        }}
+                                                        className="px-1.5 py-1 bg-[var(--c-input)] text-[var(--c-danger)] hover:bg-red-500/10"
+                                                        title="删除文风预设"
+                                                    >
+                                                        <Trash2 size={11} />
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                <textarea
+                                    value={cfg.stylePrompt ?? DEFAULT_STYLE_PRESETS[0].content}
+                                    onChange={e => updateCfg({ stylePrompt: e.target.value })}
+                                    rows={6}
+                                    placeholder="描写你想要的叙事文风（例如：冷峻克制、意识流、日系轻小说或古典电影感）..."
+                                    className="ui-textarea ts-12 leading-relaxed"
+                                />
+
+                                <div className="flex items-center gap-2 pt-1">
+                                    <Input
+                                        type="text"
+                                        value={styleNameDraft}
+                                        onChange={e => setStyleNameDraft(e.target.value)}
+                                        placeholder="输入文风预设名称..."
+                                        className="flex-1 ts-12"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            const name = styleNameDraft.trim() || "自定义文风";
+                                            const existingSameName = stylePresets.find(x => x.name === name && !x.builtIn);
+                                            const saved = upsertOfflineStylePreset({
+                                                id: existingSameName?.id,
+                                                name,
+                                                content: cfg.stylePrompt || DEFAULT_STYLE_PRESETS[0].content,
+                                            });
+                                            setStylePresets(loadOfflineStylePresets());
+                                            updateCfg({ stylePresetId: saved.id, styleEnabled: true });
+                                            onToast(`已保存文风预设「${saved.name}」`);
+                                        }}
+                                        className="ui-btn ui-btn-primary px-3 py-2 rounded-xl ts-12 shrink-0 flex items-center gap-1"
+                                    >
+                                        <Save size={14} />
+                                        保存预设
+                                    </button>
+                                </div>
+                            </div>
+                        </>
+                    )}
+
+                    {studioTab === "summary" && (
+                        <div className="rounded-2xl bg-[var(--c-card)] p-4 border border-black/5 flex flex-col gap-3">
+                            <div className="flex flex-col gap-1">
+                                <span className="ts-14 font-bold text-[var(--c-text-title)]">与线上一致的记忆总结机制</span>
+                                <span className="ts-12 text-[var(--c-text)] opacity-80 leading-relaxed">
+                                    1. 线下每轮回复都会自动提取 <code className="px-1 py-0.5 rounded bg-black/5 font-mono">&lt;summary&gt;</code> 事件摘要进入短期记忆流，并同步计入自动总结轮数（满阈值自动调用记忆总结 API 写入长期记忆）。
+                                    <br />
+                                    2. 你也可以在下方手动立即把最新线下与线上事件压缩总结进角色的「记忆库」。
+                                </span>
+                            </div>
+
+                            {summaryResult && (
+                                <div className="rounded-xl bg-[var(--c-input)] px-3 py-2.5 ts-12 text-[var(--c-text-title)]">
+                                    {summaryResult}
+                                </div>
+                            )}
+
+                            <div className="flex gap-2 pt-1">
+                                <button
+                                    type="button"
+                                    disabled={summarizing}
+                                    onClick={() => void handleRunSummary(false)}
+                                    className="ui-btn ui-btn-primary flex-1 rounded-xl py-2.5 flex items-center justify-center gap-1.5"
+                                >
+                                    {summarizing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                                    <span>总结新增事件</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={summarizing}
+                                    onClick={() => void handleRunSummary(true)}
+                                    className="ui-btn ui-btn-outline flex-1 rounded-xl py-2.5"
+                                >
+                                    全量重新总结
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
 }
 
 export function OfflineChatApp({ onClose }: { onClose: () => void }) {
@@ -52,6 +599,16 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
     const [offlineAppCss, setOfflineAppCss] = useState(() => (typeof window !== "undefined" ? kvGet(OFFLINE_APP_CSS_KEY) || "" : ""));
     const [cssDraft, setCssDraft] = useState("");
     const [showCharPicker, setShowCharPicker] = useState(false);
+    const [showStudioDrawer, setShowStudioDrawer] = useState(false);
+    const [toastText, setToastText] = useState<string | null>(null);
+    const [studioRevision, setStudioRevision] = useState(0);
+
+    const showToast = (msg: string) => {
+        setToastText(msg);
+        window.setTimeout(() => {
+            setToastText(prev => (prev === msg ? null : prev));
+        }, 2400);
+    };
 
     const refreshAll = () => {
         setSessions(loadChatSessions());
@@ -70,20 +627,34 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
 
     useEffect(() => {
         const onSync = () => refreshAll();
+        const onStudioSync = () => setStudioRevision(v => v + 1);
         window.addEventListener("settings-bindings-updated", onSync);
         window.addEventListener("settings-identities-updated", onSync);
         window.addEventListener("chat-messages-updated", onSync);
         window.addEventListener(CHAT_APP_SETTINGS_UPDATED_EVENT, onSync);
+        window.addEventListener(OFFLINE_STUDIO_UPDATED_EVENT, onStudioSync);
         return () => {
             window.removeEventListener("settings-bindings-updated", onSync);
             window.removeEventListener("settings-identities-updated", onSync);
             window.removeEventListener("chat-messages-updated", onSync);
             window.removeEventListener(CHAT_APP_SETTINGS_UPDATED_EVENT, onSync);
+            window.removeEventListener(OFFLINE_STUDIO_UPDATED_EVENT, onStudioSync);
         };
     }, []);
 
     const characters = useMemo(() => (dbReady ? loadCharacters() : []), [dbReady, sessions]);
-    const contacts = useMemo(() => (dbReady ? loadChatContacts() : []), [dbReady, sessions]);
+    const charMap = useMemo(() => new Map<string, Character>(characters.map(c => [c.id, c])), [characters]);
+
+    const activeStudioSummary = useMemo(() => {
+        void studioRevision;
+        if (!activeSession) return { activeCount: 0 };
+        const cfg = loadOfflineSessionConfig(activeSession.id);
+        let activeCount = 0;
+        if (cfg.useIndependentWorldBooks) activeCount += 1;
+        if (cfg.cotEnabled) activeCount += 1;
+        if (cfg.styleEnabled) activeCount += 1;
+        return { activeCount };
+    }, [activeSession, studioRevision]);
 
     const selectGlobalIdentity = (id: string) => {
         const cfg = loadBindingConfig();
@@ -138,15 +709,11 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
     }
 
     const keyword = searchText.trim().toLowerCase();
-    const charMap = new Map<string, Character>(characters.map(c => [c.id, c]));
 
     const filteredOfflineSessions = sessions
         .filter(s => {
             if (filterByIdentity && identity?.id && !doesSessionMatchIdentity(s, identity.id)) return false;
             if (tab === "groups" && !s.isGroup) return false;
-            if (tab === "recent" && !getLastChatOfflineTurn(s.id) && !s.isGroup) {
-                // recent 优先展示有过线下记录的会话，若没有任何线下记录则回退展示全部单聊联系人会话
-            }
             const title = s.isGroup
                 ? (s.groupName || "群聊")
                 : (s.alias || charMap.get(s.contactId)?.name || "");
@@ -226,7 +793,7 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
                             <MapPin size={20} className="text-[var(--c-text-title)]" />
                             <span className="ts-24 font-bold text-[var(--c-text-title)]">线下剧场</span>
                         </div>
-                        <span className="ts-11 text-[var(--c-icon)]">与微信聊天互通存档</span>
+                        <span className="ts-11 text-[var(--c-icon)]">独立世界书 · 思维链 · 文风</span>
                     </div>
                     <div className="chat-search-bar">
                         <input
@@ -289,7 +856,7 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
                                                 <span className="ts-11 text-[var(--c-icon)]">{turnCount > 0 ? `${turnCount} 幕` : "未开始"}</span>
                                             </div>
                                             <span className="ts-13 text-[var(--c-text)] opacity-80 truncate">
-                                                {lastTurn ? getChatOfflineTurnPreview(lastTurn).replace(/^\[线下\]\s*/, "") : "点击直接进入面对面线下互动"}
+                                                {lastTurn ? getChatOfflineTurnPreview(lastTurn).replace(/^\[线下\]\s*/, "") : "点击进入面对面线下互动"}
                                             </span>
                                         </div>
                                     </div>
@@ -359,7 +926,7 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
                 </div>
             </PageShell>
 
-            {/* 角色快速选择弹窗 */}
+            {/* 角色快速选择弹窗（两列网格） */}
             {showCharPicker && (
                 <div className="modal-overlay" onClick={() => setShowCharPicker(false)}>
                     <div className="modal-dialog" onClick={e => e.stopPropagation()}>
@@ -367,12 +934,12 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
                         {filteredCharacters.length === 0 ? (
                             <span className="menu-desc">暂无可用角色</span>
                         ) : (
-                            <div className="flex flex-col gap-1.5 w-full max-h-[50vh] overflow-y-auto">
+                            <div className="grid grid-cols-2 gap-2 w-full max-h-[50vh] overflow-y-auto">
                                 {filteredCharacters.map(c => (
                                     <button
                                         key={c.id}
                                         type="button"
-                                        className="flex items-center gap-3 w-full px-3 py-2 rounded-xl bg-[var(--c-input)] text-left"
+                                        className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl bg-[var(--c-input)] text-left min-w-0"
                                         onClick={() => {
                                             const sess = createOrGetSession(c.id);
                                             setSessions(loadChatSessions());
@@ -380,10 +947,10 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
                                             setActiveSession(sess);
                                         }}
                                     >
-                                        <div className="w-9 h-9 rounded-full overflow-hidden bg-[var(--c-card)] shrink-0 flex items-center justify-center">
+                                        <div className="w-8 h-8 rounded-full overflow-hidden bg-[var(--c-card)] shrink-0 flex items-center justify-center">
                                             {c.avatar ? <img src={c.avatar} alt="" className="w-full h-full object-cover" /> : <ChatFallbackAvatar />}
                                         </div>
-                                        <span className="ts-14 font-medium text-[var(--c-text-title)] truncate">{c.name}</span>
+                                        <span className="ts-13 font-medium text-[var(--c-text-title)] truncate">{c.name}</span>
                                     </button>
                                 ))}
                             </div>
@@ -448,7 +1015,7 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
                 </div>
             )}
 
-            {/* 挂载独立的线下会话室（与聊天内的线下完全互通存档） */}
+            {/* 挂载独立的线下会话室（带专属「场记台」悬浮胶囊：独立世界书 / 思维链预设 / 文风预设 / 记忆总结） */}
             {activeSession && (
                 <div className="chat-room-layer absolute inset-0 z-30">
                     <ChatRoom
@@ -457,13 +1024,49 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
                         forceOffline
                         onBack={() => {
                             setActiveSession(null);
+                            setShowStudioDrawer(false);
                             refreshAll();
                         }}
                         onDeleted={() => {
                             setActiveSession(null);
+                            setShowStudioDrawer(false);
                             refreshAll();
                         }}
                     />
+
+                    {/* 线下场记悬浮胶囊按钮（位于顶栏下方右侧，不遮挡顶栏与输入框） */}
+                    <button
+                        type="button"
+                        onClick={() => setShowStudioDrawer(true)}
+                        className="absolute right-3.5 z-[45] flex items-center gap-1.5 rounded-full bg-black/80 text-white px-3 py-1.5 shadow-lg backdrop-blur-md active:scale-95 transition-all"
+                        style={{ top: "calc(var(--page-header-safe-top, 48px) + 58px)" }}
+                        title="线下独立世界书 · 思维链 · 文风 · 记忆总结"
+                    >
+                        <SlidersHorizontal size={13} />
+                        <span className="text-[11px] font-semibold tracking-wide">场记台</span>
+                        {activeStudioSummary.activeCount > 0 && (
+                            <span className="min-w-[16px] h-[16px] px-1 rounded-full bg-emerald-400 text-black text-[10px] font-bold flex items-center justify-center">
+                                {activeStudioSummary.activeCount}
+                            </span>
+                        )}
+                    </button>
+
+                    {showStudioDrawer && (
+                        <OfflineStudioDrawer
+                            session={activeSession}
+                            character={charMap.get(activeSession.contactId) || null}
+                            onClose={() => setShowStudioDrawer(false)}
+                            onToast={showToast}
+                        />
+                    )}
+                </div>
+            )}
+
+            {toastText && (
+                <div className="fixed bottom-24 inset-x-0 z-[10080] flex justify-center pointer-events-none">
+                    <div className="px-4 py-2 rounded-full bg-black/85 text-white ts-12 shadow-lg">
+                        {toastText}
+                    </div>
                 </div>
             )}
         </div>

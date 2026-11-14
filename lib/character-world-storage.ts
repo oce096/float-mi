@@ -186,6 +186,19 @@ export function updateCharacterWorldDescription(groupId: string, description: st
     ));
 }
 
+/** 拖拽调整世界观卷宗排列顺序 */
+export function reorderCharacterWorldGroups(fromGroupId: string, toGroupId: string): void {
+    if (!fromGroupId || !toGroupId || fromGroupId === toGroupId) return;
+    const groups = loadCharacterWorldGroups();
+    const fromIdx = groups.findIndex(group => group.id === fromGroupId);
+    const toIdx = groups.findIndex(group => group.id === toGroupId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const next = [...groups];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    saveCharacterWorldGroups(next);
+}
+
 export function deleteCharacterWorldGroup(groupId: string): void {
     if (groupId === DEFAULT_CHARACTER_WORLD_ID) return;
     const groups = loadCharacterWorldGroups();

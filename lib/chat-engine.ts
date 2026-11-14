@@ -91,6 +91,7 @@ import {
 import { parseOfflineResponse, extractThinkingTag, type ParsedOfflineResponse } from "./chat-offline-storage";
 import { throwIfAborted } from "./abort-utils";
 import { armShortcutContinuation, SHORTCUT_VISION_OFF_NOTE, type ShortcutContinuationHandle, type ShortcutContinuationStyle } from "./shortcut-continuation-client";
+import { buildOfflineStudioSystemPrompt, resolveOfflineStudioWorldBooks } from "./offline-studio-storage";
 
 
 
@@ -1847,12 +1848,16 @@ export async function buildChatPromptMessages(
     }
 
     const allWorldBooks = loadWorldBooks();
+    const isOfflinePrompt = options?.appTags?.includes("offline") === true;
+    const independentOfflineWbs = isOfflinePrompt && promptProfile?.enableWorldBooks !== false
+        ? resolveOfflineStudioWorldBooks(session.id, allWorldBooks)
+        : null;
     const extraWorldBookIds = options?.extraWorldBookIds ?? [];
     const worldBookIds = [...new Set([...(activeSlot.worldBookIds || []), ...extraWorldBookIds])];
     const rawWorldBooks = promptProfile?.enableWorldBooks === false
         ? []
         : worldBookIds.map(id => allWorldBooks.find(w => w.id === id)).filter(Boolean) as typeof allWorldBooks;
-    const worldBooks = applyWorldBookEntryOverrides(rawWorldBooks, character.id);
+    const worldBooks = independentOfflineWbs ?? applyWorldBookEntryOverrides(rawWorldBooks, character.id);
 
     const allRegexes = loadRegexes();
     const regexes = promptProfile?.enableRegexes === false
@@ -2059,9 +2064,16 @@ export async function generateOfflineChatCompletion(
             excludeOfflineSessionId: session.id,
         },
     );
+    const studioPrompt = buildOfflineStudioSystemPrompt(session.id);
+    if (studioPrompt.systemInstruction) {
+        llmMessages.push({
+            role: "system",
+            content: studioPrompt.systemInstruction,
+        });
+    }
     const summaryTag = preset?.story_summary_tag?.trim() || "summary";
-    const thinkingTag = preset?.thinking_tag?.trim() || "thinking";
-    const offlineTagEnabled = preset?.offline_thinking_enabled === true;
+    const thinkingTag = studioPrompt.forceThinkingTag || preset?.thinking_tag?.trim() || "thinking";
+    const offlineTagEnabled = Boolean(studioPrompt.forceThinkingTag) || preset?.offline_thinking_enabled === true;
     let reasoning = "";
     const meta = { characterName: character.name, userName: userIdentity?.name };
     const requestOptions = {
@@ -2130,6 +2142,15 @@ export async function generateOfflineChatCompletion(
             break;
         }
     }
+
+    // 与线上一致推进记忆总结计数：线下每完成一轮有效互动（并生成摘要供时间线读取），
+    // 自动递增事件计数并按需触发「记忆总结 API」生成长期记忆
+    incrementEventCounter(character.id);
+    if (parsed.summary.trim()) {
+        incrementEventCounter(character.id);
+    }
+    maybeRunSummarization(character.id, character.name)
+        .catch(err => console.warn("[OfflineChat] Auto summarization failed:", err));
 
     return {
         ...parsed,
