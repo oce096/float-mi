@@ -81,14 +81,14 @@ async function resolveReadingInput(
     }
     if (!apiConfig) return null;
 
-    const presets = loadPresets();
+    const presets = loadPresets().filter(p => p.presetGroup !== "offline");
     let preset: PresetConfig | null = presetId
         ? presets.find(p => p.id === presetId) ?? null
         : null;
     if (!preset) preset = presets.find(p => p.builtIn) ?? presets[0] ?? null;
 
     const worldBooks = loadWorldBooks().filter(wb => worldBookIds.includes(wb.id));
-    const regexes = loadRegexes().filter(r => regexIds.includes(r.id));
+    const regexes = loadRegexes().filter(r => r.regexGroup !== "offline" && regexIds.includes(r.id));
 
     const identities = (await import("./settings-storage")).loadUserIdentities();
     const userIdentity = userIdentityId

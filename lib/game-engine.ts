@@ -55,11 +55,11 @@ function resolveGameConfigs(characterId?: string): GameConfigs {
   const apiConfig = loadApiConfigs().find(config => config.id === activeSlot.apiConfigId);
   if (!apiConfig) throw new ChatEngineError(character ? `API Configuration not found for ${character.name}.` : "API Configuration not found for game.");
 
-  const presets = loadPresets();
+  const presets = loadPresets().filter(p => p.presetGroup !== "offline");
   let preset = activeSlot.presetId ? presets.find(item => item.id === activeSlot.presetId) || null : null;
   if (!preset) preset = presets.find(item => item.builtIn) ?? null;
 
-  const allRegexes = loadRegexes();
+  const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
   const regexes = (activeSlot.regexIds || [])
     .map(id => allRegexes.find(regex => regex.id === id))
     .filter(Boolean) as RegexConfig[];

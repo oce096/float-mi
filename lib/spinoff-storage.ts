@@ -102,6 +102,8 @@ export type SpinoffTurn = {
 };
 
 export type SpinoffCharacterStudioConfig = {
+    presetId?: string;
+    regexIds?: string[];
     useIndependentWorldBooks?: boolean;
     worldBookIds?: string[];
     worldBookEntryOverrides?: Record<string, boolean>;
@@ -473,8 +475,11 @@ export async function generateSpinoffTurnCompletion(params: {
     });
 
     const built = await buildChatPromptMessages(baseSession, history, {
-        appTags: ["chat", "offline"],
+        appId: "spinoff",
+        appTags: ["chat", "offline", "spinoff"],
         toolsAllowed: false,
+        overridePresetId: studio.presetId || undefined,
+        extraRegexIds: studio.regexIds,
         promptProfile: studio.useIndependentWorldBooks ? { enableWorldBooks: false } : undefined,
     });
 
@@ -543,7 +548,7 @@ export async function generateSpinoffTurnCompletion(params: {
             llmMessages,
             regexes,
             meta,
-            { appId: "chat", appTags: ["chat", "offline"], signal },
+            { appId: "spinoff", appTags: ["chat", "offline", "spinoff"], signal },
             {
                 onDelta: (delta) => {
                     accum += delta;
@@ -562,8 +567,8 @@ export async function generateSpinoffTurnCompletion(params: {
         rawOutput = streamRes.content;
     } else {
         rawOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, {
-            appId: "chat",
-            appTags: ["chat", "offline"],
+            appId: "spinoff",
+            appTags: ["chat", "offline", "spinoff"],
             signal,
             onReasoning: (r) => { reasoning = r; },
         });

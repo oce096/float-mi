@@ -807,11 +807,11 @@ export async function characterReact(
   try {
     const bindings = loadBindingConfig();
     const slot = resolveBinding(bindings, characterId, "adventure");
-    const allPresets = loadPresets();
+    const allPresets = loadPresets().filter(p => p.presetGroup !== "offline");
     const preset = slot.presetId ? allPresets.find(p => p.id === slot.presetId) ?? allPresets.find(p => p.builtIn) ?? null : allPresets.find(p => p.builtIn) ?? null;
     const allWorldBooks = loadWorldBooks();
     const worldBooks = (slot.worldBookIds || []).map(id => allWorldBooks.find(w => w.id === id)).filter(Boolean) as typeof allWorldBooks;
-    const allRegexes = loadRegexes();
+    const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
     const regexes = (slot.regexIds || []).map(id => allRegexes.find(r => r.id === id)).filter(Boolean) as typeof allRegexes;
     const userIdentity = resolveUserIdentity(characterId, "adventure");
     const apiConfigs = loadApiConfigs();
@@ -1001,11 +1001,11 @@ async function buildCompanionDeclarePromptPayload(
   const bindings = loadBindingConfig();
   const slot = resolveBinding(bindings, characterId, "adventure");
   const globalSlot = resolveBinding(bindings, undefined, "adventure");
-  const allPresets = loadPresets();
+  const allPresets = loadPresets().filter(p => p.presetGroup !== "offline");
   const preset = slot.presetId ? allPresets.find(p => p.id === slot.presetId) ?? allPresets.find(p => p.builtIn) ?? null : allPresets.find(p => p.builtIn) ?? null;
   const allWorldBooks = loadWorldBooks();
   const worldBooks = (slot.worldBookIds || []).map(id => allWorldBooks.find(w => w.id === id)).filter(Boolean) as typeof allWorldBooks;
-  const allRegexes = loadRegexes();
+  const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
   const regexes = (slot.regexIds || []).map(id => allRegexes.find(r => r.id === id)).filter(Boolean) as typeof allRegexes;
   const userIdentity = overrideUserIdentity !== undefined ? overrideUserIdentity : resolveUserIdentity(characterId, "adventure");
   const apiConfigs = loadApiConfigs();

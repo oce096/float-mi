@@ -7,6 +7,9 @@ import {
     savePresets,
     createPreset,
     parsePresetFromJson,
+    parseAirpOfflinePresetBundle,
+    loadRegexes,
+    saveRegexes,
     resetBuiltinPreset,
     UNSUPPORTED_IMPORT_FORMAT,
 } from "@/lib/settings-storage";
@@ -329,6 +332,8 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
     const [parameterPickerOpen, setParameterPickerOpen] = useState(false);
     const [expandTarget, setExpandTarget] = useState<{ identifier: string; field: string } | null>(null);
     const [importError, setImportError] = useState<string | null>(null);
+    const [importSuccess, setImportSuccess] = useState<string | null>(null);
+    const [presetGroupTab, setPresetGroupTab] = useState<"online" | "offline">("online");
     const [customApps, setCustomApps] = useState<InstalledCustomApp[]>([]);
     // ── 多选模式（右滑选中 / 批量操作 / 多选拖拽） ──
     const [selectMode, setSelectMode] = useState(false);
@@ -352,6 +357,7 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
     }, []);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const offlineAirpFileInputRef = useRef<HTMLInputElement>(null);
 
     const { setSubpageTitle, setOverrideBack, setSubpageRightAction } = useContext(SettingsContext);
 
@@ -659,11 +665,15 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
     }, []);
 
     const addPreset = useCallback(() => {
-        const newPreset = createPreset("新预设");
+        const newPreset = createPreset(presetGroupTab === "offline" ? "新线下预设" : "新预设");
+        if (presetGroupTab === "offline") {
+            newPreset.presetGroup = "offline";
+            newPreset.description = "线下专属预设（仅在线下与番外馆/小剧场中生效）";
+        }
         persist([newPreset, ...presets]);
         setEditingId(newPreset.id);
         setViewMode("detail");
-    }, [persist, presets]);
+    }, [persist, presets, presetGroupTab]);
 
     const duplicatePreset = useCallback((preset: PresetConfig) => {
         const now = Date.now();
@@ -691,24 +701,24 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
             <div className="flex items-center gap-2">
                 <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-[20px] border border-black/10 bg-white px-4 text-xs font-bold text-gray-800 shadow-sm transition-all hover:bg-gray-50 hover:shadow-md active:scale-95 focus:outline-none"
+                    onClick={() => (presetGroupTab === "offline" ? offlineAirpFileInputRef.current?.click() : fileInputRef.current?.click())}
+                    className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-[20px] border border-black/10 bg-white px-3.5 text-xs font-bold text-gray-800 shadow-sm transition-all hover:bg-gray-50 hover:shadow-md active:scale-95 focus:outline-none"
                 >
                     <Upload size={15} strokeWidth={1.8} />
-                    <span>导入预设</span>
+                    <span>{presetGroupTab === "offline" ? "导入酒馆预设" : "导入预设"}</span>
                 </button>
                 <button
                     type="button"
                     onClick={addPreset}
-                    className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-[20px] bg-black px-4 text-xs font-bold text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md active:scale-95 focus:outline-none"
+                    className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-[20px] bg-black px-3.5 text-xs font-bold text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md active:scale-95 focus:outline-none"
                 >
                     <Plus size={15} strokeWidth={1.8} />
-                    <span>新建预设</span>
+                    <span>{presetGroupTab === "offline" ? "新建线下" : "新建预设"}</span>
                 </button>
             </div>
         );
         return () => setSubpageRightAction("presets", null);
-    }, [addPreset, setSubpageRightAction, viewMode]);
+    }, [addPreset, presetGroupTab, setSubpageRightAction, viewMode]);
 
     const updatePreset = (id: string, updates: Partial<PresetConfig>) => {
         persist(presets.map(p => p.id === id ? { ...p, ...updates, updatedAt: Date.now() } : p));
@@ -1107,6 +1117,38 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
         }
     };
 
+    const handleOfflineAirpImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const text = event.target?.result as string;
+                const fallbackName = file.name.replace(/\.json$/i, "") || "导入的线下预设";
+                const bundle = parseAirpOfflinePresetBundle(text, fallbackName);
+                if (!bundle) {
+                    setImportError("无法解析该预设文件，请检查 JSON 格式是否正确。");
+                    return;
+                }
+                persist([bundle.preset, ...presets]);
+                if (bundle.regexGroup) {
+                    const existingRegexes = loadRegexes();
+                    saveRegexes([bundle.regexGroup, ...existingRegexes]);
+                    setImportSuccess(`已导入线下预设「${bundle.preset.name}」，并同步向正则库导入了 ${bundle.regexGroup.rules.length} 条绑定正则！`);
+                } else {
+                    setImportSuccess(`已导入线下预设「${bundle.preset.name}」（仅在线下与番外馆/小剧场生效）。`);
+                }
+                setPresetGroupTab("offline");
+            } catch {
+                setImportError("无法解析该预设文件，请确认 JSON 完整无误。");
+            }
+        };
+        reader.readAsText(file);
+        if (offlineAirpFileInputRef.current) {
+            offlineAirpFileInputRef.current.value = "";
+        }
+    };
+
     const handleExport = async (preset: PresetConfig) => {
         const exportData = { ...preset };
         const { downloadFile } = await import("@/lib/download-utils");
@@ -1119,65 +1161,149 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
     return (
         <div ref={containerRef} className="flex flex-col gap-[24px] h-full">
             <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={handleImport} />
+            <input type="file" accept=".json" className="hidden" ref={offlineAirpFileInputRef} onChange={handleOfflineAirpImport} />
             <input type="file" accept=".json" className="hidden" ref={entryFileInputRef} onChange={handleEntryImportFile} />
             {viewMode === "list" ? (
                 <>
-                    <div className="flex items-center">
-                        <h2 className="m-0 mx-2 ts-28 font-bold italic leading-none text-black">Presets</h2>
+                    <div className="flex flex-col gap-3">
+                        <div className="flex items-center justify-between">
+                            <h2 className="m-0 mx-2 ts-28 font-bold italic leading-none text-black">Presets</h2>
+                        </div>
+
+                        {/* 分组切换：通用/线上预设 vs 线下/剧场专属分组 */}
+                        <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-[var(--c-input)] p-1">
+                            <button
+                                type="button"
+                                onClick={() => setPresetGroupTab("online")}
+                                className={`py-2 px-3 rounded-xl ts-12 font-bold transition-all ${
+                                    presetGroupTab === "online"
+                                        ? "bg-black text-white shadow-sm"
+                                        : "text-[var(--c-text)] opacity-75"
+                                }`}
+                            >
+                                通用预设 ({presets.filter(p => p.presetGroup !== "offline").length})
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setPresetGroupTab("offline")}
+                                className={`py-2 px-3 rounded-xl ts-12 font-bold transition-all ${
+                                    presetGroupTab === "offline"
+                                        ? "bg-black text-white shadow-sm"
+                                        : "text-[var(--c-text)] opacity-75"
+                                }`}
+                            >
+                                线下 / 小剧场分组 ({presets.filter(p => p.presetGroup === "offline").length})
+                            </button>
+                        </div>
+
+                        {presetGroupTab === "offline" && (
+                            <div className="rounded-2xl border border-black/10 bg-[var(--c-card)] p-3.5 flex flex-col gap-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="ts-12 font-bold text-[var(--c-text-title)]">线下与小剧场隔离分组</span>
+                                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700">兼容酒馆导入</span>
+                                </div>
+                                <span className="ts-11 text-[var(--c-icon)] leading-relaxed">
+                                    此分组支持直接导入酒馆（AIRP）预设 JSON，若预设带有绑定正则将同步导入至「正则规则 → 线下分组」。本分组下的预设与正则只会在线下软件和番外馆/小剧场中生效，不会影响线上聊天等其他软件。
+                                </span>
+                                <div className="flex gap-2 pt-0.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => offlineAirpFileInputRef.current?.click()}
+                                        className="ui-btn ui-btn-primary !py-2 !px-3.5 rounded-xl ts-12 flex-1 flex items-center justify-center gap-1.5"
+                                    >
+                                        <Upload size={14} /> 导入酒馆 / 线下预设（含绑定正则）
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {importSuccess && (
+                            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2.5 flex items-center justify-between gap-2">
+                                <span className="ts-12 text-emerald-800 font-medium leading-snug">{importSuccess}</span>
+                                <button type="button" onClick={() => setImportSuccess(null)} className="text-emerald-700 text-xs font-bold shrink-0">关闭</button>
+                            </div>
+                        )}
                     </div>
 
-                    {presets.length === 0 ? (
-                        <div className="ui-empty mt-5">
-                            <div className="ui-icon-circle">
-                                <MessageSquare size={24} />
-                            </div>
-                            <span className="menu-label font-semibold">没有预设</span>
-                            <span className="menu-desc max-w-[240px]">
-                                预设用于定义 AI 的回复风格、行为设定和核心参数。
-                            </span>
-                            <div className="flex gap-3">
-                                <button onClick={addPreset} className="ui-btn ui-btn-primary">
-                                    <Plus size={16} /> 新建预设
-                                </button>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="flex flex-col gap-3">
-                            {presets.map(preset => (
-                                <div
-                                    key={preset.id}
-                                    className="ui-config-card min-w-0 cursor-pointer"
-                                    style={{ minHeight: "84px", padding: "16px", justifyContent: "space-between" }}
-                                    role="button"
-                                    tabIndex={0}
-                                    aria-label={`编辑 ${preset.name || "预设"}`}
-                                    onClick={() => { setEditingId(preset.id); setViewMode("detail"); }}
-                                    onKeyDown={(event) => {
-                                        if (event.target !== event.currentTarget) return;
-                                        if (event.key === "Enter" || event.key === " ") {
-                                            event.preventDefault();
-                                            setEditingId(preset.id);
-                                            setViewMode("detail");
-                                        }
-                                    }}
-                                >
-                                    <div className="min-w-0 flex flex-col gap-1.5">
-                                        <div className="min-w-0 flex items-center gap-[6px]">
-                                            <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{preset.name}</span>
-                                            {preset.builtIn && (
-                                                <span className="ui-badge shrink-0" data-variant="success">内置</span>
-                                            )}
-                                        </div>
-                                        <span className="menu-desc truncate">{preset.description || `包含 ${preset.prompts?.length || 0} 个设定条目`}</span>
+                    {(() => {
+                        const groupList = presets.filter(p =>
+                            presetGroupTab === "offline" ? p.presetGroup === "offline" : p.presetGroup !== "offline",
+                        );
+                        if (groupList.length === 0) {
+                            return (
+                                <div className="ui-empty mt-4">
+                                    <div className="ui-icon-circle">
+                                        <MessageSquare size={24} />
                                     </div>
-                                    <div className="flex items-center justify-between gap-2">
-                                        <span className="menu-desc ts-12">条目 {preset.prompts?.length || 0}</span>
-                                        <ChevronLeft size={16} style={{ transform: "rotate(180deg)", opacity: 0.4 }} />
+                                    <span className="menu-label font-semibold">
+                                        {presetGroupTab === "offline" ? "暂无线下分组预设" : "没有预设"}
+                                    </span>
+                                    <span className="menu-desc max-w-[260px]">
+                                        {presetGroupTab === "offline"
+                                            ? "可导入酒馆（AIRP）预设，专门用于线下软件与番外馆/小剧场演绎。"
+                                            : "预设用于定义 AI 的回复风格、行为设定和核心参数。"}
+                                    </span>
+                                    <div className="flex gap-2 mt-1">
+                                        {presetGroupTab === "offline" && (
+                                            <button onClick={() => offlineAirpFileInputRef.current?.click()} className="ui-btn ui-btn-outline">
+                                                <Upload size={15} /> 导入酒馆预设
+                                            </button>
+                                        )}
+                                        <button onClick={addPreset} className="ui-btn ui-btn-primary">
+                                            <Plus size={16} /> {presetGroupTab === "offline" ? "新建线下预设" : "新建预设"}
+                                        </button>
                                     </div>
                                 </div>
-                            ))}
-                        </div>
-                    )}
+                            );
+                        }
+                        return (
+                            <div className="flex flex-col gap-3">
+                                {groupList.map(preset => (
+                                    <div
+                                        key={preset.id}
+                                        className="ui-config-card min-w-0 cursor-pointer"
+                                        style={{ minHeight: "84px", padding: "16px", justifyContent: "space-between" }}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={`编辑 ${preset.name || "预设"}`}
+                                        onClick={() => { setEditingId(preset.id); setViewMode("detail"); }}
+                                        onKeyDown={(event) => {
+                                            if (event.target !== event.currentTarget) return;
+                                            if (event.key === "Enter" || event.key === " ") {
+                                                event.preventDefault();
+                                                setEditingId(preset.id);
+                                                setViewMode("detail");
+                                            }
+                                        }}
+                                    >
+                                        <div className="min-w-0 flex flex-col gap-1.5">
+                                            <div className="min-w-0 flex items-center gap-[6px]">
+                                                <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{preset.name}</span>
+                                                {preset.builtIn && (
+                                                    <span className="ui-badge shrink-0" data-variant="success">内置</span>
+                                                )}
+                                                {preset.presetGroup === "offline" && (
+                                                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 shrink-0">
+                                                        线下/小剧场专属
+                                                    </span>
+                                                )}
+                                                {(preset.boundRegexGroupIds?.length ?? 0) > 0 && (
+                                                    <span className="rounded-full bg-indigo-500/12 px-2 py-0.5 text-[10px] font-bold text-indigo-700 shrink-0">
+                                                        含绑定正则
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <span className="menu-desc truncate">{preset.description || `包含 ${preset.prompts?.length || 0} 个设定条目`}</span>
+                                        </div>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="menu-desc ts-12">条目 {preset.prompts?.length || 0}</span>
+                                            <ChevronLeft size={16} style={{ transform: "rotate(180deg)", opacity: 0.4 }} />
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        );
+                    })()}
                 </>
             ) : (
                 <>
@@ -1251,6 +1377,23 @@ export function PresetManager({ isActive = true }: { isActive?: boolean } = {}) 
                                                 className="ui-textarea resize-none"
                                             />
                                         </div>
+
+                                        {!preset.builtIn && (
+                                            <div className="flex items-center justify-between gap-2 pt-1">
+                                                <div className="flex flex-col">
+                                                    <span className="menu-label ts-13 font-semibold ml-1">所属预设分组</span>
+                                                    <span className="ts-11 text-[var(--c-icon)] ml-1">线下分组仅在线下与番外馆/小剧场中生效</span>
+                                                </div>
+                                                <select
+                                                    value={preset.presetGroup === "offline" ? "offline" : "online"}
+                                                    onChange={(e) => updatePreset(preset.id, { presetGroup: e.target.value === "offline" ? "offline" : undefined })}
+                                                    className="ui-select !w-auto !py-1.5 !px-3 ts-12"
+                                                >
+                                                    <option value="online">通用分组</option>
+                                                    <option value="offline">线下/小剧场专属</option>
+                                                </select>
+                                            </div>
+                                        )}
 
                                         {/* Collapsible: 生成参数 */}
                                         <div className="ui-collapsible">

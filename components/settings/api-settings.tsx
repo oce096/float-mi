@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback, useContext } from "react";
-import { Plus, RefreshCw, Rss, AlertCircle, FileEdit, Trash2, X, Check } from "lucide-react";
+import { Plus, RefreshCw, Rss, AlertCircle, FileEdit, Trash2, X, Check, Copy, Sparkles } from "lucide-react";
 import { SettingsContext } from "../phone-settings-app";
 import type { ApiConfig } from "@/lib/settings-types";
-import { loadApiConfigs, removeApiConfigReferences, saveApiConfigs } from "@/lib/settings-storage";
+import { loadApiConfigs, loadBindingConfig, removeApiConfigReferences, saveApiConfigs, saveBindingConfig } from "@/lib/settings-storage";
 import { generateEmbedding, isEmbeddingModelName } from "@/lib/memory-embedding";
 import { ConfirmDialog } from "@/components/ui/modal";
 import { Toggle, Input } from "@/components/ui/form";
@@ -38,6 +38,7 @@ export function ApiSettings() {
     const [isNewConfig, setIsNewConfig] = useState(false);
     const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
     const [isLoaded, setIsLoaded] = useState(false);
+    const [secondaryApiId, setSecondaryApiId] = useState<string>("");
 
     // Testing and Fetching states
     const [isFetching, setIsFetching] = useState<Record<string, boolean>>({});
@@ -54,8 +55,34 @@ export function ApiSettings() {
             setConfigs(DEFAULT_CONFIGS);
             saveApiConfigs(DEFAULT_CONFIGS);
         }
+        setSecondaryApiId(loadBindingConfig().secondaryApiConfigId || "");
         setIsLoaded(true);
     }, []);
+
+    const toggleSecondaryApi = (id: string) => {
+        const current = loadBindingConfig();
+        const nextId = current.secondaryApiConfigId === id ? undefined : id;
+        saveBindingConfig({ ...current, secondaryApiConfigId: nextId });
+        setSecondaryApiId(nextId || "");
+    };
+
+    const duplicateConfig = (source: ApiConfig) => {
+        const cloned: ApiConfig = {
+            ...source,
+            id: `config-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            name: `${source.name || source.provider} (副本)`,
+        };
+        const idx = configs.findIndex(c => c.id === source.id);
+        const next = [...configs];
+        if (idx >= 0) next.splice(idx + 1, 0, cloned);
+        else next.push(cloned);
+        persist(next);
+        if (fetchedModels[source.id]?.length) {
+            setFetchedModels(prev => ({ ...prev, [cloned.id]: [...fetchedModels[source.id]] }));
+        }
+        setIsNewConfig(false);
+        setEditingId(cloned.id);
+    };
 
     const persist = useCallback((newConfigs: ApiConfig[]) => {
         setConfigs(newConfigs);
@@ -213,8 +240,40 @@ export function ApiSettings() {
 
     return (
         <div className="flex flex-col gap-6">
-            <div className="flex items-center">
-                <h2 className="m-0 mx-2 ts-28 font-bold italic leading-none text-black">API Settings</h2>
+            <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                    <h2 className="m-0 mx-2 ts-28 font-bold italic leading-none text-black">API Settings</h2>
+                </div>
+                {configs.length > 0 && (
+                    <div className="rounded-2xl border border-black/10 bg-[var(--c-card)] px-3.5 py-2.5 flex items-center justify-between gap-2.5 shadow-sm">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className="w-7 h-7 rounded-xl bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
+                                <Sparkles size={15} />
+                            </span>
+                            <div className="flex flex-col min-w-0 flex-1">
+                                <span className="ts-12 font-bold text-[var(--c-text-title)]">副 API（朋友圈/周边分流）</span>
+                                <span className="ts-10 text-[var(--c-icon)] truncate">
+                                    朋友圈、手记、小红书、查手机等后台调动优先调用副 API
+                                </span>
+                            </div>
+                        </div>
+                        <select
+                            value={secondaryApiId}
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                const current = loadBindingConfig();
+                                saveBindingConfig({ ...current, secondaryApiConfigId: val || undefined });
+                                setSecondaryApiId(val);
+                            }}
+                            className="ui-select !w-auto !max-w-[145px] !py-1.5 !px-2.5 !text-[12px] shrink-0"
+                        >
+                            <option value="">跟随主 API</option>
+                            {configs.map(c => (
+                                <option key={c.id} value={c.id}>{c.name || c.provider}</option>
+                            ))}
+                        </select>
+                    </div>
+                )}
             </div>
 
             {configs.length === 0 ? (
@@ -232,52 +291,90 @@ export function ApiSettings() {
                 </div>
             ) : (
                 <div className="grid grid-cols-2 gap-3">
-                    {configs.map(config => (
-                        <div
-                            key={config.id}
-                            className="ui-config-card min-w-0 cursor-pointer"
-                            style={{ aspectRatio: "3 / 2", padding: "12px", justifyContent: "space-between" }}
-                            role="button"
-                            tabIndex={0}
-                            aria-label={`编辑 ${config.name || config.provider}`}
-                            onClick={() => setEditingId(config.id)}
-                            onKeyDown={(event) => {
-                                if (event.target !== event.currentTarget) return;
-                                if (event.key === "Enter" || event.key === " ") {
-                                    event.preventDefault();
-                                    setEditingId(config.id);
-                                }
-                            }}
-                        >
-                            <div className="min-w-0 flex flex-col gap-1">
-                                <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{config.name || config.provider}</span>
-                                <span className="menu-desc truncate">{config.defaultModel || config.provider || "未设置模型"}</span>
-                            </div>
-                            <div className="flex gap-2 shrink-0 items-center justify-end">
-                                <button
-                                    type="button"
-                                    onClick={(event) => {
-                                        event.stopPropagation();
+                    {configs.map(config => {
+                        const isSecondary = secondaryApiId === config.id;
+                        return (
+                            <div
+                                key={config.id}
+                                className="ui-config-card min-w-0 cursor-pointer relative"
+                                style={{ aspectRatio: "3 / 2", padding: "12px", justifyContent: "space-between" }}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`编辑 ${config.name || config.provider}`}
+                                onClick={() => setEditingId(config.id)}
+                                onKeyDown={(event) => {
+                                    if (event.target !== event.currentTarget) return;
+                                    if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
                                         setEditingId(config.id);
-                                    }}
-                                    className="ui-link-btn"
-                                >
-                                    <FileEdit size={18} />
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        setConfirmDeleteId(config.id);
-                                    }}
-                                    className="ui-link-btn"
-                                    data-variant="danger"
-                                >
-                                    <Trash2 size={18} />
-                                </button>
+                                    }
+                                }}
+                            >
+                                <div className="min-w-0 flex flex-col gap-1">
+                                    <div className="flex items-center justify-between gap-1.5 min-w-0">
+                                        <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{config.name || config.provider}</span>
+                                        {isSecondary && (
+                                            <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9.5px] font-bold text-amber-700">
+                                                副API
+                                            </span>
+                                        )}
+                                    </div>
+                                    <span className="menu-desc truncate">{config.defaultModel || config.provider || "未设置模型"}</span>
+                                </div>
+                                <div className="flex gap-1.5 shrink-0 items-center justify-between pt-1">
+                                    <button
+                                        type="button"
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            toggleSecondaryApi(config.id);
+                                        }}
+                                        title={isSecondary ? "取消副 API" : "设为朋友圈/周边副 API"}
+                                        className={`px-2 py-0.5 rounded-full text-[10px] font-semibold transition-all ${
+                                            isSecondary
+                                                ? "bg-black text-white"
+                                                : "bg-black/5 text-[var(--c-icon)] hover:bg-black/10"
+                                        }`}
+                                    >
+                                        {isSecondary ? "已设副API" : "设为副"}
+                                    </button>
+                                    <div className="flex gap-1.5 items-center">
+                                        <button
+                                            type="button"
+                                            title="复制此 API 方案（快速拉取其他模型）"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                duplicateConfig(config);
+                                            }}
+                                            className="ui-link-btn"
+                                        >
+                                            <Copy size={16} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                setEditingId(config.id);
+                                            }}
+                                            className="ui-link-btn"
+                                        >
+                                            <FileEdit size={16} />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                setConfirmDeleteId(config.id);
+                                            }}
+                                            className="ui-link-btn"
+                                            data-variant="danger"
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
 
@@ -444,6 +541,26 @@ export function ApiSettings() {
                                                 onChange={(v) => updateConfig(config.id, { preventEmptyGenerateRambling: v })}
                                             />
                                         </div>
+
+                                        <div className="ui-toggle-row mt-2">
+                                            <span className="flex min-w-0 flex-col">
+                                                <span className="menu-label font-medium">设为全局副 API</span>
+                                                <span className="menu-desc">朋友圈、手记、小红书、查手机等后台调动默认使用此方案</span>
+                                            </span>
+                                            <Toggle
+                                                checked={secondaryApiId === config.id}
+                                                onChange={() => toggleSecondaryApi(config.id)}
+                                            />
+                                        </div>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => duplicateConfig(config)}
+                                            className="ui-btn ui-btn-outline mt-2 flex items-center justify-center gap-1.5"
+                                        >
+                                            <Copy size={15} />
+                                            <span>复制此配置（快速拉取切换其他模型）</span>
+                                        </button>
 
                                     </>
                                 )

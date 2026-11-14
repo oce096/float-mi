@@ -13,6 +13,7 @@ import {
     Layers,
     Mic,
     RotateCcw,
+    Sparkles,
     User,
     UserPlus,
     Wrench,
@@ -68,7 +69,7 @@ type Level = "global" | "character" | "app";
 type SingleBindingField = "apiConfigId" | "voiceConfigId" | "presetId" | "userIdentityId";
 type MultiBindingField = "worldBookIds" | "regexIds";
 type BindingField = SingleBindingField | MultiBindingField;
-type AuxBindingField = "memorySummaryApiConfigId" | "embeddingApiConfigId" | "mascotApiConfigId" | "reasoningTranslateApiConfigId" | "qaApiConfigId";
+type AuxBindingField = "secondaryApiConfigId" | "memorySummaryApiConfigId" | "embeddingApiConfigId" | "mascotApiConfigId" | "reasoningTranslateApiConfigId" | "qaApiConfigId";
 
 const BINDING_FIELD_VISUALS: Record<BindingField, { icon: LucideIcon; color: string }> = {
     apiConfigId: { icon: Code2, color: BINDING_ACCENTS.api },
@@ -80,6 +81,7 @@ const BINDING_FIELD_VISUALS: Record<BindingField, { icon: LucideIcon; color: str
 };
 
 const AUX_FIELD_VISUALS: Record<AuxBindingField, { icon: LucideIcon; color: string }> = {
+    secondaryApiConfigId: { icon: Sparkles, color: CONTENT_APP_ACCENTS.moments },
     memorySummaryApiConfigId: { icon: Brain, color: BINDING_ACCENTS.memory },
     embeddingApiConfigId: { icon: Box, color: BINDING_ACCENTS.embedding },
     mascotApiConfigId: { icon: Code2, color: BINDING_ACCENTS.api },
@@ -88,7 +90,7 @@ const AUX_FIELD_VISUALS: Record<AuxBindingField, { icon: LucideIcon; color: stri
 };
 
 const APP_OVERRIDE_COLORS = CONTENT_APP_ACCENTS;
-const REGEX_BINDABLE_APP_IDS: ContentAppId[] = ["chat", "group_chat", "story"];
+const REGEX_BINDABLE_APP_IDS: ContentAppId[] = ["chat", "group_chat", "story", "offline_chat", "spinoff"];
 
 const bindingAccentStyle = (color: string): CSSProperties => ({
     "--binding-accent": color,
@@ -243,6 +245,10 @@ export function BindingManager() {
             }
             if (prev.qaApiConfigId && !validSets.api.has(prev.qaApiConfigId)) {
                 next.qaApiConfigId = undefined;
+                dirty = true;
+            }
+            if (prev.secondaryApiConfigId && !validSets.api.has(prev.secondaryApiConfigId)) {
+                next.secondaryApiConfigId = undefined;
                 dirty = true;
             }
             if (dirty) {
@@ -448,6 +454,7 @@ export function BindingManager() {
 
     const getAuxFieldDescription = (field: AuxBindingField): string => {
         switch (field) {
+            case "secondaryApiConfigId": return "朋友圈、小红书、手记、查手机等周边/后台调动默认调用";
             case "memorySummaryApiConfigId": return "用于聊天记忆压缩";
             case "embeddingApiConfigId": return "用于语义向量召回";
             case "mascotApiConfigId": return "用于小卷对话与工具调用";
@@ -458,6 +465,7 @@ export function BindingManager() {
 
     const getAuxFieldLabel = (field: AuxBindingField): string => {
         switch (field) {
+            case "secondaryApiConfigId": return "副 API（朋友圈/周边调动）";
             case "memorySummaryApiConfigId": return "记忆总结 API";
             case "embeddingApiConfigId": return "向量召回 API";
             case "mascotApiConfigId": return "小卷助手 API";
@@ -467,19 +475,24 @@ export function BindingManager() {
     };
 
     const getBindingFieldOptions = (field: BindingField): { id: string; name: string }[] => {
+        const allowOfflineGroup = level === "app" && (selectedAppId === "offline_chat" || selectedAppId === "spinoff");
         switch (field) {
             case "apiConfigId":
                 return apiConfigs.map(c => ({ id: c.id, name: c.name || c.provider }));
             case "voiceConfigId":
                 return voiceConfigs.map(c => ({ id: c.id, name: c.name || c.provider }));
             case "presetId":
-                return presets.map(p => ({ id: p.id, name: p.name }));
+                return presets
+                    .filter(p => allowOfflineGroup || p.presetGroup !== "offline")
+                    .map(p => ({ id: p.id, name: p.presetGroup === "offline" ? `[线下] ${p.name}` : p.name }));
             case "userIdentityId":
                 return identities.map(i => ({ id: i.id, name: getUserIdentityDisplayName(i) }));
             case "worldBookIds":
                 return worldBooks.map(w => ({ id: w.id, name: w.name }));
             case "regexIds":
-                return regexes.map(r => ({ id: r.id, name: r.name }));
+                return regexes
+                    .filter(r => allowOfflineGroup || r.regexGroup !== "offline")
+                    .map(r => ({ id: r.id, name: r.regexGroup === "offline" ? `[线下] ${r.name}` : r.name }));
         }
     };
 
@@ -1051,6 +1064,7 @@ export function BindingManager() {
                     <section className="flex flex-col gap-3">
                         <p className="settings-menu-section-title">Auxiliary API</p>
                         <div className="flex flex-col gap-3">
+                            {renderAuxSelect("secondaryApiConfigId", "副 API（朋友圈/周边调动）")}
                             {renderAuxSelect("memorySummaryApiConfigId", "记忆总结 API")}
                             {renderAuxSelect("embeddingApiConfigId", "向量召回 API")}
                             {renderAuxSelect("mascotApiConfigId", "小卷助手 API")}

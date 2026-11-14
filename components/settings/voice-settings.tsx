@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useContext } from "react";
-import { Plus, Play, Pause, AlertCircle, RefreshCw, FileEdit, Trash2, X, Check, Upload, List } from "lucide-react";
+import { Plus, Play, Pause, AlertCircle, RefreshCw, FileEdit, Trash2, X, Check, Upload, List, Copy } from "lucide-react";
 import { SettingsContext } from "../phone-settings-app";
 import type { VoiceApiConfig } from "@/lib/settings-types";
 import { loadVoiceConfigs, saveVoiceConfigs } from "@/lib/settings-storage";
@@ -361,6 +361,25 @@ export function VoiceSettings() {
         persist(configs.map(c => c.id === id ? { ...c, ...updates } : c));
     };
 
+    const duplicateVoiceConfig = (source: VoiceApiConfig) => {
+        const cloned: VoiceApiConfig = {
+            ...source,
+            id: `voice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            name: `${source.name || source.provider} (副本)`,
+            customVoices: source.customVoices ? [...source.customVoices] : undefined,
+        };
+        const idx = configs.findIndex(c => c.id === source.id);
+        const next = [...configs];
+        if (idx >= 0) next.splice(idx + 1, 0, cloned);
+        else next.push(cloned);
+        persist(next);
+        if (fetchedVoices[source.id]?.length) {
+            setFetchedVoices(prev => ({ ...prev, [cloned.id]: [...fetchedVoices[source.id]] }));
+        }
+        setIsNewConfig(false);
+        setEditingId(cloned.id);
+    };
+
     const updateProvider = (id: string, providerOption: string) => {
         const current = configs.find(c => c.id === id);
         if (providerOption === "OpenAI") {
@@ -715,7 +734,18 @@ export function VoiceSettings() {
                                 <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{config.name || config.provider}</span>
                                 <span className="menu-desc truncate">{config.defaultVoice || config.model || config.provider || "未设置音色"}</span>
                             </div>
-                            <div className="flex gap-2 shrink-0 items-center justify-end">
+                            <div className="flex gap-1.5 shrink-0 items-center justify-end">
+                                <button
+                                    type="button"
+                                    title="复制此语音方案（快速切换其他音色/模型）"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        duplicateVoiceConfig(config);
+                                    }}
+                                    className="ui-link-btn"
+                                >
+                                    <Copy size={16} />
+                                </button>
                                 <button
                                     type="button"
                                     onClick={(event) => {
@@ -724,7 +754,7 @@ export function VoiceSettings() {
                                     }}
                                     className="ui-link-btn"
                                 >
-                                    <FileEdit size={18} />
+                                    <FileEdit size={16} />
                                 </button>
                                 <button
                                     type="button"
@@ -735,7 +765,7 @@ export function VoiceSettings() {
                                     className="ui-link-btn"
                                     data-variant="danger"
                                 >
-                                    <Trash2 size={18} />
+                                    <Trash2 size={16} />
                                 </button>
                             </div>
                         </div>
@@ -1180,6 +1210,15 @@ export function VoiceSettings() {
                                             <span className="menu-label font-medium">启用语音合成 (TTS)</span>
                                             <Toggle checked={config.enableTTS} onChange={(v) => updateConfig(config.id, { enableTTS: v })} />
                                         </div>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => duplicateVoiceConfig(config)}
+                                            className="ui-btn ui-btn-outline mt-1 flex items-center justify-center gap-1.5"
+                                        >
+                                            <Copy size={15} />
+                                            <span>复制此语音配置（快速配置其他音色/模型）</span>
+                                        </button>
                                     </div>
                                 )
                             })()}

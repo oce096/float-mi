@@ -93,13 +93,13 @@ function resolveStoryConfigs(characterId: string): {
     throw new ChatEngineError(`API Configuration not found for ${character.name}.`);
   }
 
-  const presets = loadPresets();
+  const presets = loadPresets().filter(p => p.presetGroup !== "offline");
   let preset = activeSlot.presetId ? presets.find((item) => item.id === activeSlot.presetId) || null : null;
   if (!preset) {
     preset = presets.find((item) => item.builtIn) ?? null;
   }
 
-  const allRegexes = loadRegexes();
+  const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
   const charBinding = bindings.characterBindings.find((item) => item.characterId === characterId);
   const storyOverrideRegexIds = charBinding?.appOverrides.story?.regexIds;
   const regexIds = storyOverrideRegexIds && storyOverrideRegexIds.length > 0

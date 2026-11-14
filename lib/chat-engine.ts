@@ -34,6 +34,9 @@ import {
     loadRegexes,
     resolveUserIdentity,
     applyWorldBookEntryOverrides,
+    isOfflinePresetScopeAllowed,
+    filterPresetsForScope,
+    filterRegexesForScope,
 } from "./settings-storage";
 import { assemblePromptPayload, applyOutputRegex, type LLMMessage, type LLMContentPart } from "./llm-prompt-assembler";
 import { MacroEngine, postProcessTrim } from "./macro-engine";
@@ -59,7 +62,7 @@ import { fetchLlmPayload } from "./llm-http";
 import { loadMemoryConfig, incrementEventCounter } from "./memory-storage";
 import { retrieveCoreMemoriesForPrompt, retrieveMemoriesForPrompt } from "./memory-service";
 import { formatCoreMemories, formatLongTermMemories } from "./memory-injector";
-import { maybeRunSummarization } from "./memory-summarizer";
+import { maybeRunSummarization, runSummarizationPipeline } from "./memory-summarizer";
 import { prepareShortTermContext } from "./short-term-assembler";
 import { parseActionTags, dispatchActions } from "./action-parser";
 import { findEnabledToolForSchema, getEnabledTools, type EnabledTool } from "./tool-storage";
@@ -88,10 +91,16 @@ import {
     DEFAULT_OFFLINE_CHAT_BILINGUAL_PROMPT,
     resolveBilingualPrompt,
 } from "./bilingual-prompt-defaults";
-import { parseOfflineResponse, extractThinkingTag, type ParsedOfflineResponse } from "./chat-offline-storage";
+import { parseOfflineResponse, extractThinkingTag, loadChatOfflineTurns, type ParsedOfflineResponse } from "./chat-offline-storage";
 import { throwIfAborted } from "./abort-utils";
 import { armShortcutContinuation, SHORTCUT_VISION_OFF_NOTE, type ShortcutContinuationHandle, type ShortcutContinuationStyle } from "./shortcut-continuation-client";
-import { buildOfflineStudioSystemPrompt, resolveOfflineStudioWorldBooks } from "./offline-studio-storage";
+import {
+    buildOfflineStudioSystemPrompt,
+    loadOfflineSessionConfig,
+    saveOfflineSessionConfig,
+    resolveOfflineEffectiveApiConfig,
+    resolveOfflineStudioWorldBooks,
+} from "./offline-studio-storage";
 
 
 
@@ -360,6 +369,8 @@ type ChatPromptBuildOptions = {
     excludeOfflineSessionId?: string;
     promptProfile?: CustomAppPromptProfile;
     extraWorldBookIds?: string[];
+    overridePresetId?: string;
+    extraRegexIds?: string[];
     worldBookActivationContext?: string;
     activateAllWorldBooks?: boolean;
     toolsAllowed?: boolean;
@@ -1828,27 +1839,36 @@ export async function buildChatPromptMessages(
     if (!character) throw new ChatEngineError(`Character not found: ${session.contactId}`);
 
     const resolvedAppId = options?.appId ?? "chat";
+    const isOfflinePrompt = options?.appTags?.includes("offline") === true;
+    const bindingLookupAppId = isOfflinePrompt && resolvedAppId === "chat" ? "offline_chat" : resolvedAppId;
     const bindings = loadBindingConfig();
-    const activeSlot = resolveBinding(bindings, character.id, resolvedAppId);
+    const activeSlot = resolveBinding(bindings, character.id, bindingLookupAppId);
 
     if (!activeSlot.apiConfigId) {
         throw new ChatEngineError(`No API Configuration bound for ${character.name}. Please go to Settings -> Chat to assign one.`);
     }
 
-    const apiConfigs = loadApiConfigs();
-    const config = apiConfigs.find(c => c.id === activeSlot.apiConfigId);
-    if (!config) throw new ChatEngineError(`API Configuration not found for ${character.name}.`);
+    const allowOfflineScope = isOfflinePresetScopeAllowed(resolvedAppId, options?.appTags);
+    const offlineStudioCfg = isOfflinePrompt ? loadOfflineSessionConfig(session.id) : null;
 
-    const presets = loadPresets();
-    let preset = activeSlot.presetId ? presets.find(p => p.id === activeSlot.presetId) || null : null;
-    if (!preset) preset = presets.find(p => p.builtIn) ?? null;
+    const apiConfigs = loadApiConfigs();
+    const baseApiConfig = apiConfigs.find(c => c.id === activeSlot.apiConfigId);
+    if (!baseApiConfig) throw new ChatEngineError(`API Configuration not found for ${character.name}.`);
+    const config = offlineStudioCfg
+        ? resolveOfflineEffectiveApiConfig(baseApiConfig, offlineStudioCfg.apiOverride, apiConfigs)
+        : baseApiConfig;
+
+    const allPresets = filterPresetsForScope(loadPresets(), allowOfflineScope);
+    const preferredPresetId = options?.overridePresetId
+        || ((offlineStudioCfg?.presetId && allowOfflineScope) ? offlineStudioCfg.presetId : activeSlot.presetId);
+    let preset = preferredPresetId ? allPresets.find(p => p.id === preferredPresetId) || null : null;
+    if (!preset) preset = allPresets.find(p => p.builtIn) ?? null;
     const promptProfile = options?.promptProfile;
     if (preset && promptProfile) {
         preset = applyCustomPromptProfileToPreset(preset, promptProfile);
     }
 
     const allWorldBooks = loadWorldBooks();
-    const isOfflinePrompt = options?.appTags?.includes("offline") === true;
     const independentOfflineWbs = isOfflinePrompt && promptProfile?.enableWorldBooks !== false
         ? resolveOfflineStudioWorldBooks(session.id, allWorldBooks)
         : null;
@@ -1859,10 +1879,16 @@ export async function buildChatPromptMessages(
         : worldBookIds.map(id => allWorldBooks.find(w => w.id === id)).filter(Boolean) as typeof allWorldBooks;
     const worldBooks = independentOfflineWbs ?? applyWorldBookEntryOverrides(rawWorldBooks, character.id);
 
-    const allRegexes = loadRegexes();
+    const allRegexes = filterRegexesForScope(loadRegexes(), allowOfflineScope);
+    const mergedRegexIds = Array.from(new Set([
+        ...(activeSlot.regexIds || []),
+        ...(options?.extraRegexIds || []),
+        ...(allowOfflineScope && offlineStudioCfg?.regexIds ? offlineStudioCfg.regexIds : []),
+        ...(allowOfflineScope && preset?.boundRegexGroupIds ? preset.boundRegexGroupIds : []),
+    ]));
     const regexes = promptProfile?.enableRegexes === false
         ? []
-        : (activeSlot.regexIds || []).map(id => allRegexes.find(r => r.id === id)).filter(Boolean) as typeof allRegexes;
+        : mergedRegexIds.map(id => allRegexes.find(r => r.id === id)).filter(Boolean) as typeof allRegexes;
 
     const userIdentity = resolveUserIdentity(character.id, resolvedAppId, session.userIdentityId);
     const attachedImages = config.enableImageRecognition === true ? options?.attachedImages : undefined;
@@ -2082,10 +2108,13 @@ export async function generateOfflineChatCompletion(
         signal: options?.signal,
         onReasoning: (t: string) => { reasoning = t; },
     };
+    const studioCfg = loadOfflineSessionConfig(session.id);
+    // 流式模式三档：auto（优先流式，不支持自动回退非流式）/ stream（强制流式）/ non_stream（强制非流式）
+    const streamMode = studioCfg.streamMode
+        ?? (session.streamOffline === true ? "stream" : session.streamOffline === false ? "non_stream" : "auto");
+
     let rawOutput: string;
-    if (isSessionStreamingEnabled(session, false) && options?.onStreamDelta) {
-        // 线下流式：正文边生成边通过 onStreamDelta 交给 UI 做实时预览；
-        // 摘要补提仍走整段请求（输出短，无需流式）。
+    if (streamMode === "stream" && options?.onStreamDelta) {
         const streamResult = await sendLLMStreamRequest(config, preset, llmMessages, regexes, meta, {
             appId: "chat",
             appTags: ["chat", "offline"],
@@ -2096,6 +2125,24 @@ export async function generateOfflineChatCompletion(
             onReasoningDelta: (t) => { reasoning += t; },
         });
         rawOutput = streamResult.content;
+    } else if (streamMode === "auto" && options?.onStreamDelta) {
+        let receivedAny = false;
+        try {
+            const streamResult = await sendLLMStreamRequest(config, preset, llmMessages, regexes, meta, {
+                appId: "chat",
+                appTags: ["chat", "offline"],
+                debugSessionId: session.id,
+                signal: options?.signal,
+            }, {
+                onDelta: (text) => { receivedAny = true; options.onStreamDelta?.(text); },
+                onReasoningDelta: (t) => { receivedAny = true; reasoning += t; },
+            });
+            rawOutput = streamResult.content;
+        } catch (err) {
+            if (receivedAny || options?.signal?.aborted) throw err;
+            console.warn("[OfflineChat] 自动流式未收到增量，平滑回退非流式请求：", err);
+            rawOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, requestOptions);
+        }
     } else {
         rawOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, requestOptions);
     }
@@ -2143,14 +2190,31 @@ export async function generateOfflineChatCompletion(
         }
     }
 
-    // 与线上一致推进记忆总结计数：线下每完成一轮有效互动（并生成摘要供时间线读取），
-    // 自动递增事件计数并按需触发「记忆总结 API」生成长期记忆
+    // 与线上一致推进记忆总结计数 + 支持当前角色线下自定义自动总结轮数阈值
     incrementEventCounter(character.id);
     if (parsed.summary.trim()) {
         incrementEventCounter(character.id);
     }
-    maybeRunSummarization(character.id, character.name)
-        .catch(err => console.warn("[OfflineChat] Auto summarization failed:", err));
+    const customTurnInterval = studioCfg.autoSummaryTurnInterval && studioCfg.autoSummaryTurnInterval > 0
+        ? studioCfg.autoSummaryTurnInterval
+        : 0;
+    if (studioCfg.autoSummaryEnabled === false) {
+        // 用户明确关闭了本场线下的自动总结
+    } else if (customTurnInterval > 0) {
+        const nextTotalTurns = loadChatOfflineTurns(session.id).length + 1;
+        const lastMarker = studioCfg.lastAutoSummaryTurnCount ?? 0;
+        if (nextTotalTurns - lastMarker >= customTurnInterval) {
+            saveOfflineSessionConfig(session.id, {
+                ...studioCfg,
+                lastAutoSummaryTurnCount: nextTotalTurns,
+            });
+            runSummarizationPipeline(character.id, character.name)
+                .catch(err => console.warn("[OfflineChat] Custom turn interval summarization failed:", err));
+        }
+    } else {
+        maybeRunSummarization(character.id, character.name)
+            .catch(err => console.warn("[OfflineChat] Auto summarization failed:", err));
+    }
 
     return {
         ...parsed,

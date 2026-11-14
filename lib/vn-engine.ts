@@ -77,7 +77,7 @@ export function resolveVnConfigs(characterId: string): {
     throw new ChatEngineError(`API Configuration not found for ${character.name}.`);
   }
 
-  const presets = loadPresets();
+  const presets = loadPresets().filter(p => p.presetGroup !== "offline");
   let preset = activeSlot.presetId
     ? presets.find((p) => p.id === activeSlot.presetId) || null
     : null;
@@ -85,7 +85,7 @@ export function resolveVnConfigs(characterId: string): {
     preset = presets.find((p) => p.builtIn) ?? null;
   }
 
-  const allRegexes = loadRegexes();
+  const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
   const regexes = (activeSlot.regexIds || [])
     .map((id) => allRegexes.find((r) => r.id === id))
     .filter(Boolean) as RegexConfig[];

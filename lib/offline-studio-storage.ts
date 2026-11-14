@@ -5,7 +5,7 @@
 // 3. 自定义叙事文风指令与预设库
 
 import { kvGet, kvSet, registerKvMigration, registerDynamicPrefix } from "./kv-db";
-import type { WorldBookConfig } from "./settings-types";
+import type { ApiConfig, WorldBookConfig } from "./settings-types";
 
 const OFFLINE_COT_PRESETS_KEY = "ai_phone_offline_cot_presets_v1";
 const OFFLINE_STYLE_PRESETS_KEY = "ai_phone_offline_style_presets_v1";
@@ -26,7 +26,35 @@ export type OfflineTextPreset = {
     updatedAt: string;
 };
 
+export type OfflineStreamMode = "auto" | "stream" | "non_stream";
+
+export type OfflineApiOverride = {
+    /** 是否启用当前角色线下的独立 API 覆盖（不影响全局与其他角色、不影响线上） */
+    enabled?: boolean;
+    /** 作为基底引用的已有 API 配置 ID（可选） */
+    sourceApiConfigId?: string;
+    provider?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    model?: string;
+};
+
 export type OfflineSessionStudioConfig = {
+    /** 当前角色线下专属选用的预设 ID（支持选用「线下分组」中的酒馆导入预设，留空沿用角色绑定） */
+    presetId?: string;
+    /** 当前角色线下额外选用的正则组 ID 列表（可勾选线下分组正则） */
+    regexIds?: string[];
+    /** 当前角色线下专属 API 覆盖（URL / KEY / 模型仅影响当前角色线下） */
+    apiOverride?: OfflineApiOverride;
+    /** 线下流式模式：auto = 自动调节（优先流式，不支持自动回退非流式）；stream = 强制流式；non_stream = 强制非流式 */
+    streamMode?: OfflineStreamMode;
+    /** 线下自动总结开关（默认跟随全局，可单独开关） */
+    autoSummaryEnabled?: boolean;
+    /** 线下自动总结轮数间隔（例如每 5 轮自动总结一次长期记忆） */
+    autoSummaryTurnInterval?: number;
+    /** 上次在线下触发自动总结时的线下回合计数水位线 */
+    lastAutoSummaryTurnCount?: number;
+
     /** true = 线下模式使用独立的自定义世界书集合（不改动线上/全局绑定）；false = 沿用角色原绑定 */
     useIndependentWorldBooks?: boolean;
     /** 线下独立勾选的世界书 ID 列表 */
@@ -287,5 +315,22 @@ export function buildOfflineStudioSystemPrompt(sessionId: string): {
     return {
         systemInstruction: blocks.join("\n\n"),
         forceThinkingTag,
+    };
+}
+
+/** 将会话级线下独立 API 覆盖合成为最终供引擎调用的 ApiConfig（只影响当前角色线下，不回写全局） */
+export function resolveOfflineEffectiveApiConfig(
+    baseConfig: ApiConfig,
+    override: OfflineApiOverride | undefined,
+    allConfigs: ApiConfig[],
+): ApiConfig {
+    if (!override?.enabled) return baseConfig;
+    const refBase = (override.sourceApiConfigId && allConfigs.find(c => c.id === override.sourceApiConfigId)) || baseConfig;
+    return {
+        ...refBase,
+        provider: override.provider?.trim() || refBase.provider || "Custom",
+        baseUrl: override.baseUrl !== undefined ? (override.baseUrl.trim() || undefined) : refBase.baseUrl,
+        apiKey: override.apiKey?.trim() || refBase.apiKey,
+        defaultModel: override.model?.trim() || refBase.defaultModel,
     };
 }

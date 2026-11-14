@@ -146,12 +146,12 @@ function resolveRuntime(characterId: string): CoCreateRuntime {
   const apiConfig = loadApiConfigs().find((item) => item.id === slot.apiConfigId);
   if (!apiConfig) throw new ChatEngineError(`找不到 ${character.name} 的共创 API 配置。`);
 
-  const presets = loadPresets();
+  const presets = loadPresets().filter(p => p.presetGroup !== "offline");
   const preset = slot.presetId
     ? presets.find((item) => item.id === slot.presetId) || presets.find((item) => item.builtIn) || null
     : presets.find((item) => item.builtIn) || null;
 
-  const allRegexes = loadRegexes();
+  const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
   const regexes = (slot.regexIds || [])
     .map((id) => allRegexes.find((item) => item.id === id))
     .filter(Boolean) as RegexConfig[];

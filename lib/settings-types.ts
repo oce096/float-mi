@@ -68,6 +68,10 @@ export type Prompt = {
 export type PresetConfig = SettingItemMeta & {
     builtIn?: boolean;
     builtInVersion?: number;
+    /** 预设分组：offline = 线下专属分组（仅在独立「线下」与「番外馆/小剧场」中生效，不作用于线上聊天等其它软件） */
+    presetGroup?: "online" | "offline";
+    /** 导入该酒馆预设时同步拆出并绑定的正则组 ID 列表 */
+    boundRegexGroupIds?: string[];
     temperature: number;
     top_p: number;
     top_k: number;
@@ -138,6 +142,10 @@ export type RegexRule = {
 
 export type RegexConfig = SettingItemMeta & {
     builtIn?: boolean;
+    /** 正则分组：offline = 线下专属分组（仅在独立「线下」与「番外馆/小剧场」中生效） */
+    regexGroup?: "online" | "offline";
+    /** 若由酒馆预设随包导入，记录来源预设 ID */
+    sourcePresetId?: string;
     rules: RegexRule[];
 };
 
@@ -261,13 +269,15 @@ export type ContentAppId =
     | "chat" | "diary" | "music" | "reading"
     | "forum" | "cocreate" | "story" | "game" | "xiaohongshu" | "dwelling"
     | "checkphone" | "shopping" | "calendar" | "interview_magazine"
-    | "moments" | "group_chat" | "vn" | "adventure";
+    | "moments" | "group_chat" | "vn" | "adventure"
+    | "offline_chat" | "spinoff";
 
 export const CONTENT_APP_IDS: ContentAppId[] = [
     "chat", "diary", "music", "reading",
     "cocreate", "story", "game", "xiaohongshu", "dwelling",
     "checkphone", "shopping", "calendar", "interview_magazine",
-    "moments", "group_chat", "vn", "adventure"
+    "moments", "group_chat", "vn", "adventure",
+    "offline_chat", "spinoff"
 ];
 
 export const CONTENT_APP_LABELS: Record<ContentAppId, string> = {
@@ -289,6 +299,8 @@ export const CONTENT_APP_LABELS: Record<ContentAppId, string> = {
     group_chat: "群聊",
     vn: "漫卷",
     adventure: "冒险",
+    offline_chat: "线下",
+    spinoff: "番外馆",
 };
 
 // Binding slot — config selections for a given scope
@@ -328,6 +340,8 @@ export type BindingConfig = {
     qaApiConfigId?: string;
     /** Auxiliary API: used to translate reasoning/chain-of-thought text (global, not per-character) */
     reasoningTranslateApiConfigId?: string;
+    /** 副 API：用于朋友圈、小红书、手记、查手机、日程等后台/周边调动（未显式单独覆盖时优先生效） */
+    secondaryApiConfigId?: string;
 };
 
 // --- Chat Toolbox ---

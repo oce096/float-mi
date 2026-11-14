@@ -394,6 +394,13 @@ export function parsePresetFromJson(text: string, fallbackName: string = "导入
             }
         }
 
+        if (obj.presetGroup === "offline" || obj.presetGroup === "online") {
+            preset.presetGroup = obj.presetGroup;
+        }
+        if (Array.isArray(obj.boundRegexGroupIds)) {
+            preset.boundRegexGroupIds = obj.boundRegexGroupIds.filter((id: unknown): id is string => typeof id === "string");
+        }
+
         // 导入的 JSON 没带顺序表时，按 prompts 数组顺序补一份，
         // 保证界面看到的顺序和组装时用的顺序永远是同一份。
         if (!preset.prompt_order?.length && preset.prompts.length > 0) {
@@ -405,6 +412,392 @@ export function parsePresetFromJson(text: string, fallbackName: string = "导入
         if (e instanceof Error && e.message === UNSUPPORTED_IMPORT_FORMAT) throw e;
         return null;
     }
+}
+
+/**
+ * 解析外部 AIRP（酒馆 SillyTavern 等）预设 JSON，专用于导入「线下分组」预设：
+ * - 自动将 SillyTavern marker（main / nsfw / jailbreak / worldInfoBefore / charDescription / chatHistory / dialogueExamples / enhanceDefinitions 等）映射或转为系统提示词条目；
+ * - 支持 character_id=100001 / 100000 等嵌套结构形式的 prompt_order；
+ * - 自动识别并提取预设内嵌的绑定正则（extensions.regex_scripts / regex_scripts / scripts），生成归属「线下分组」的 RegexConfig 以便同步落入正则规则库！
+ */
+export function parseAirpOfflinePresetBundle(
+    text: string,
+    fallbackName: string = "导入的线下预设",
+): { preset: PresetConfig; regexGroup: RegexConfig | null } | null {
+    try {
+        const obj = JSON.parse(text);
+        if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+
+        const preset = createPreset(typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : fallbackName);
+        preset.presetGroup = "offline";
+        preset.description = typeof obj.description === "string" && obj.description.trim()
+            ? obj.description.trim()
+            : "线下专属预设（仅在线下与番外馆/小剧场中生效）";
+
+        // 1. 提取采样参数（兼容 ST 字段名）
+        const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+        if (num(obj.temperature) !== undefined) preset.temperature = round2(num(obj.temperature)!);
+        if (num(obj.top_p) !== undefined) preset.top_p = round2(num(obj.top_p)!);
+        if (num(obj.top_k) !== undefined) preset.top_k = Math.round(num(obj.top_k)!);
+        if (num(obj.frequency_penalty ?? obj.freq_pen) !== undefined) {
+            preset.frequency_penalty = round2(num(obj.frequency_penalty ?? obj.freq_pen)!);
+        }
+        if (num(obj.presence_penalty ?? obj.pres_pen) !== undefined) {
+            preset.presence_penalty = round2(num(obj.presence_penalty ?? obj.pres_pen)!);
+        }
+        if (num(obj.repetition_penalty ?? obj.rep_pen) !== undefined) {
+            preset.repetition_penalty = round2(num(obj.repetition_penalty ?? obj.rep_pen)!);
+        }
+        if (num(obj.openai_max_tokens ?? obj.max_length ?? obj.genamt) !== undefined) {
+            preset.openai_max_tokens = Math.max(0, Math.round(num(obj.openai_max_tokens ?? obj.max_length ?? obj.genamt)!));
+        }
+        if (num(obj.openai_max_context ?? obj.max_context) !== undefined) {
+            preset.openai_max_context = Math.max(2048, Math.round(num(obj.openai_max_context ?? obj.max_context)!));
+        }
+        if (num(obj.min_p) !== undefined) preset.min_p = round2(num(obj.min_p)!);
+        if (num(obj.top_a) !== undefined) preset.top_a = round2(num(obj.top_a)!);
+        if (typeof obj.wi_format === "string") preset.wi_format = obj.wi_format;
+        if (typeof obj.scenario_format === "string") preset.scenario_format = obj.scenario_format;
+        if (typeof obj.personality_format === "string") preset.personality_format = obj.personality_format;
+        if (typeof obj.impersonation_prompt === "string") preset.impersonation_prompt = obj.impersonation_prompt;
+        if (typeof obj.new_chat_prompt === "string") preset.new_chat_prompt = obj.new_chat_prompt;
+        if (typeof obj.continue_nudge_prompt === "string") preset.continue_nudge_prompt = obj.continue_nudge_prompt;
+        if (typeof obj.thinking_tag === "string") preset.thinking_tag = obj.thinking_tag;
+        if (typeof obj.story_summary_tag === "string") preset.story_summary_tag = obj.story_summary_tag;
+
+        // 2. 映射 ST 标准 marker 标识符到本系统的标准 marker
+        const ST_MARKER_MAP: Record<string, { identifier: string; defaultName: string }> = {
+            personaDescription: { identifier: "personaDescription", defaultName: "◇ 用户人设" },
+            worldInfoBefore: { identifier: "worldInfoBefore", defaultName: "◇ 世界书（角色前）" },
+            charDescription: { identifier: "charDescription", defaultName: "◇ 角色描述" },
+            charPersonality: { identifier: "charPersonality", defaultName: "◇ 角色性格" },
+            worldInfoAfter: { identifier: "worldInfoAfter", defaultName: "◇ 世界书（角色后）" },
+            chatHistory: { identifier: "shortTermMemory", defaultName: "◇ [短期记忆]" },
+            shortTermMemory: { identifier: "shortTermMemory", defaultName: "◇ [短期记忆]" },
+            memoryCore: { identifier: "memoryCore", defaultName: "◇ 核心记忆" },
+            memoryLongTerm: { identifier: "memoryLongTerm", defaultName: "◇ 长期记忆" },
+            characterRelations: { identifier: "characterRelations", defaultName: "◇ 角色关系" },
+            calendarSchedule: { identifier: "calendarSchedule", defaultName: "◇ 日程" },
+        };
+
+        const rawPrompts: Record<string, unknown>[] = Array.isArray(obj.prompts) ? obj.prompts : [];
+        const idRemap = new Map<string, string>();
+        const usedIds = new Set<string>();
+        const parsedPrompts: Prompt[] = [];
+
+        for (let idx = 0; idx < rawPrompts.length; idx++) {
+            const p = rawPrompts[idx];
+            if (!p || typeof p !== "object") continue;
+            const origId = String(p.identifier || p.name || `airp_prompt_${idx}`);
+            const isMarkerRaw = Boolean(p.marker);
+            const mappedMarker = ST_MARKER_MAP[origId];
+
+            // ST 里 scenario / dialogueExamples 若是空 marker，跳过空壳以免污染；若有 content 则作为普通条目保留
+            if (isMarkerRaw && !mappedMarker && !String(p.content || "").trim()) {
+                continue;
+            }
+
+            let finalId = mappedMarker ? mappedMarker.identifier : origId;
+            if (usedIds.has(finalId)) {
+                if (mappedMarker) {
+                    idRemap.set(origId, finalId);
+                    continue;
+                }
+                let suffix = 1;
+                while (usedIds.has(`${finalId}_${suffix}`)) suffix++;
+                finalId = `${finalId}_${suffix}`;
+            }
+            usedIds.add(finalId);
+            idRemap.set(origId, finalId);
+
+            const roleRaw = String(p.role || "system").toLowerCase();
+            const role = roleRaw === "user" || roleRaw === "assistant" || roleRaw === "system" ? roleRaw : "system";
+            const enabled = p.enabled !== false && p.forbid_overrides !== "disabled";
+
+            parsedPrompts.push(normalizePresetPromptScope({
+                identifier: finalId,
+                name: String(p.name || mappedMarker?.defaultName || origId),
+                role,
+                content: mappedMarker ? "" : String(p.content ?? ""),
+                injection_depth: typeof p.injection_depth === "number" ? p.injection_depth : 0,
+                injection_position: typeof p.injection_position === "number" ? p.injection_position : 0,
+                enabled,
+                system_prompt: Boolean(p.system_prompt),
+                marker: Boolean(mappedMarker),
+                forbid_overrides: Boolean(p.forbid_overrides),
+                tags: Array.isArray(p.tags) && p.tags.length > 0 ? p.tags.map(String) : undefined,
+            }));
+        }
+
+        // 若导入的酒馆预设里缺了角色核心记忆/长期记忆/人设等本系统关键 marker，自动在合适位置温和补齐（默认启用），保证角色不会失忆
+        const ensureSystemMarker = (id: string, name: string, beforeHistory = true) => {
+            if (usedIds.has(id)) return;
+            usedIds.add(id);
+            const markerPrompt: Prompt = {
+                identifier: id,
+                name,
+                role: "system",
+                content: "",
+                injection_depth: 0,
+                injection_position: 0,
+                enabled: true,
+                marker: true,
+            };
+            if (beforeHistory) {
+                const histIdx = parsedPrompts.findIndex(item => item.identifier === "shortTermMemory");
+                if (histIdx >= 0) parsedPrompts.splice(histIdx, 0, markerPrompt);
+                else parsedPrompts.push(markerPrompt);
+            } else {
+                parsedPrompts.push(markerPrompt);
+            }
+        };
+
+        ensureSystemMarker("personaDescription", "◇ 用户人设", true);
+        ensureSystemMarker("worldInfoBefore", "◇ 世界书（角色前）", true);
+        ensureSystemMarker("charDescription", "◇ 角色描述", true);
+        ensureSystemMarker("charPersonality", "◇ 角色性格", true);
+        ensureSystemMarker("characterRelations", "◇ 角色关系", true);
+        ensureSystemMarker("worldInfoAfter", "◇ 世界书（角色后）", true);
+        ensureSystemMarker("memoryCore", "◇ 核心记忆", true);
+        ensureSystemMarker("memoryLongTerm", "◇ 长期记忆", true);
+        if (!usedIds.has("shortTermMemory")) {
+            usedIds.add("shortTermMemory");
+            parsedPrompts.push({
+                identifier: "shortTermMemory",
+                name: "◇ [短期记忆]",
+                role: "system",
+                content: "",
+                injection_depth: 0,
+                injection_position: 0,
+                enabled: true,
+                marker: true,
+            });
+        }
+
+        // 兼容 assistant_prefill（酒馆常见末尾预填）
+        if (typeof obj.assistant_prefill === "string" && obj.assistant_prefill.trim()) {
+            const prefillId = "airp_assistant_prefill";
+            usedIds.add(prefillId);
+            parsedPrompts.push({
+                identifier: prefillId,
+                name: "▸ 助手回复预填 (Prefill)",
+                role: "assistant",
+                content: obj.assistant_prefill.trim(),
+                injection_depth: 0,
+                injection_position: 0,
+                enabled: false, // 默认先折叠关闭，可在收纳抽屉一键开启，避免部分中转不支持末尾 assistant 报错
+            });
+        }
+
+        preset.prompts = parsedPrompts;
+
+        // 3. 解析 prompt_order（兼容平铺数组与 ST 的 [{ character_id: 100001, order: [...] }] 结构）
+        let extractedOrder: Array<{ identifier: string; enabled: boolean }> = [];
+        if (Array.isArray(obj.prompt_order)) {
+            const first = obj.prompt_order[0];
+            if (first && typeof first === "object" && Array.isArray((first as { order?: unknown }).order)) {
+                // SillyTavern character_id 嵌套数组：优先选 100001（全局默认顺序）或最后一个非空项
+                const bucket = (obj.prompt_order as Array<{ character_id?: number; order?: unknown[] }>)
+                    .find(b => b?.character_id === 100001 && Array.isArray(b.order) && b.order.length > 0)
+                    || (obj.prompt_order as Array<{ order?: unknown[] }>).find(b => Array.isArray(b?.order) && b.order.length > 0);
+                if (bucket && Array.isArray(bucket.order)) {
+                    for (const entry of bucket.order) {
+                        if (!entry || typeof entry !== "object") continue;
+                        const rawId = String((entry as { identifier?: unknown }).identifier || "");
+                        const mappedId = idRemap.get(rawId) || (ST_MARKER_MAP[rawId]?.identifier ?? rawId);
+                        if (!mappedId || !usedIds.has(mappedId)) continue;
+                        if (extractedOrder.some(x => x.identifier === mappedId)) continue;
+                        extractedOrder.push({
+                            identifier: mappedId,
+                            enabled: (entry as { enabled?: unknown }).enabled !== false,
+                        });
+                    }
+                }
+            } else {
+                for (const entry of obj.prompt_order) {
+                    if (!entry || typeof entry !== "object") continue;
+                    const rawId = String((entry as { identifier?: unknown }).identifier || "");
+                    const mappedId = idRemap.get(rawId) || (ST_MARKER_MAP[rawId]?.identifier ?? rawId);
+                    if (!mappedId || !usedIds.has(mappedId)) continue;
+                    if (extractedOrder.some(x => x.identifier === mappedId)) continue;
+                    extractedOrder.push({
+                        identifier: mappedId,
+                        enabled: (entry as { enabled?: unknown }).enabled !== false,
+                    });
+                }
+            }
+        }
+
+        // 把自动补齐的记忆/世界书 marker 也放进顺序表合适位置
+        if (extractedOrder.length > 0) {
+            const orderIds = new Set(extractedOrder.map(e => e.identifier));
+            const histPos = extractedOrder.findIndex(e => e.identifier === "shortTermMemory");
+            const missingPrompts = parsedPrompts.filter(p => !orderIds.has(p.identifier));
+            const missingMarkers = missingPrompts.filter(p => p.marker);
+            const missingNormals = missingPrompts.filter(p => !p.marker);
+            if (histPos >= 0 && missingMarkers.length > 0) {
+                extractedOrder.splice(
+                    histPos,
+                    0,
+                    ...missingMarkers.map(p => ({ identifier: p.identifier, enabled: p.enabled })),
+                );
+            } else if (missingMarkers.length > 0) {
+                extractedOrder.unshift(...missingMarkers.map(p => ({ identifier: p.identifier, enabled: p.enabled })));
+            }
+            extractedOrder.push(...missingNormals.map(p => ({ identifier: p.identifier, enabled: p.enabled })));
+            preset.prompt_order = extractedOrder;
+        } else {
+            preset.prompt_order = parsedPrompts.map(p => ({ identifier: p.identifier, enabled: p.enabled }));
+        }
+
+        // 同步条目自身的 enabled 与 prompt_order 对齐
+        const orderEnabledMap = new Map(preset.prompt_order.map(o => [o.identifier, o.enabled]));
+        preset.prompts = preset.prompts.map(p => ({
+            ...p,
+            enabled: orderEnabledMap.get(p.identifier) ?? p.enabled,
+        }));
+
+        // 4. 提取预设内嵌的绑定正则（SillyTavern: extensions.regex_scripts / regex_scripts / regexes / scripts）
+        const ext = (obj.extensions && typeof obj.extensions === "object") ? (obj.extensions as Record<string, unknown>) : {};
+        const rawRegexCandidate =
+            (Array.isArray(ext.regex_scripts) ? ext.regex_scripts : null)
+            || (Array.isArray(ext.regexes) ? ext.regexes : null)
+            || (Array.isArray(obj.regex_scripts) ? obj.regex_scripts : null)
+            || (Array.isArray(obj.regexes) ? obj.regexes : null)
+            || (Array.isArray(obj.scripts) ? obj.scripts : null)
+            || (obj.regex && typeof obj.regex === "object" && Array.isArray((obj.regex as { rules?: unknown }).rules)
+                ? (obj.regex as { rules: unknown[] }).rules
+                : null);
+
+        let regexGroup: RegexConfig | null = null;
+        if (rawRegexCandidate && rawRegexCandidate.length > 0) {
+            const group = createRegexGroup(`${preset.name} · 绑定正则`);
+            group.regexGroup = "offline";
+            group.sourcePresetId = preset.id;
+            group.description = `随线下预设「${preset.name}」自动导入，仅在线下与小剧场/番外馆生效`;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const rules: RegexRule[] = rawRegexCandidate.map((r: any, idx: number): RegexRule | null => {
+                if (!r || typeof r !== "object") return null;
+                const findStr = String(r.findRegex ?? r.regex ?? "");
+                const nameStr = String(r.scriptName ?? r.name ?? `预设正则 #${idx + 1}`);
+                if (!findStr && !r.scriptName && !r.name) return null;
+                let placement: number[] = Array.isArray(r.placement)
+                    ? r.placement.map(Number).filter((n: number) => !Number.isNaN(n))
+                    : [2];
+                if (placement.length === 0) placement = [2];
+                return {
+                    id: typeof r.id === "string" && r.id ? r.id : generateId("regex-rule"),
+                    scriptName: nameStr,
+                    findRegex: findStr,
+                    replaceString: String(r.replaceString ?? r.replace ?? ""),
+                    disabled: Boolean(r.disabled),
+                    placement,
+                    trimStrings: Array.isArray(r.trimStrings) && r.trimStrings.length > 0 ? r.trimStrings.map(String) : undefined,
+                    markdownOnly: r.markdownOnly === true ? true : undefined,
+                    promptOnly: r.promptOnly === true ? true : undefined,
+                    runOnEdit: r.runOnEdit === true ? true : undefined,
+                    substituteRegex: typeof r.substituteRegex === "number" ? r.substituteRegex : undefined,
+                    minDepth: typeof r.minDepth === "number" && !Number.isNaN(r.minDepth) ? r.minDepth : undefined,
+                    maxDepth: typeof r.maxDepth === "number" && !Number.isNaN(r.maxDepth) ? r.maxDepth : undefined,
+                };
+            }).filter((item): item is RegexRule => item !== null);
+
+            if (rules.length > 0) {
+                group.rules = rules;
+                regexGroup = group;
+                preset.boundRegexGroupIds = [group.id];
+            }
+        }
+
+        return { preset, regexGroup };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * 解析独立导入到「线下分组」的正则文件（兼容酒馆单条正则 JSON、规则数组 `[...]`、或本机 `{ name, rules }` 格式）
+ */
+export function parseOfflineRegexFromJson(text: string, fallbackName: string = "导入的线下正则"): RegexConfig | null {
+    try {
+        const obj = JSON.parse(text);
+        if (!obj) return null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let rawList: any[] = [];
+        let groupName = fallbackName;
+        let desc = "线下专属正则组（仅在线下与番外馆/小剧场生效）";
+
+        if (Array.isArray(obj)) {
+            rawList = obj;
+            if (obj[0]?.scriptName) groupName = fallbackName || String(obj[0].scriptName);
+        } else if (typeof obj === "object") {
+            if (Array.isArray(obj.rules)) {
+                rawList = obj.rules;
+                if (obj.name) groupName = String(obj.name);
+                if (obj.description) desc = String(obj.description);
+            } else if (Array.isArray(obj.regex_scripts)) {
+                rawList = obj.regex_scripts;
+                if (obj.name) groupName = String(obj.name);
+            } else if (typeof obj.findRegex === "string" || typeof obj.scriptName === "string") {
+                rawList = [obj];
+                groupName = String(obj.scriptName || fallbackName);
+            } else {
+                return null;
+            }
+        } else {
+            return null;
+        }
+
+        const group = createRegexGroup(groupName);
+        group.regexGroup = "offline";
+        group.description = desc;
+        group.rules = rawList
+            .map((r, i): RegexRule | null => {
+                if (!r || typeof r !== "object") return null;
+                let placement: number[] = Array.isArray(r.placement)
+                    ? r.placement.map(Number).filter((n: number) => !Number.isNaN(n))
+                    : [2];
+                if (placement.length === 0) placement = [2];
+                return {
+                    id: typeof r.id === "string" && r.id ? r.id : generateId(`rx_off_${i}`),
+                    scriptName: String(r.scriptName || r.name || `规则 #${i + 1}`),
+                    findRegex: String(r.findRegex || r.regex || ""),
+                    replaceString: String(r.replaceString || r.replace || ""),
+                    disabled: Boolean(r.disabled),
+                    placement,
+                    trimStrings: Array.isArray(r.trimStrings) && r.trimStrings.length > 0 ? r.trimStrings.map(String) : undefined,
+                    markdownOnly: r.markdownOnly === true ? true : undefined,
+                    promptOnly: r.promptOnly === true ? true : undefined,
+                    runOnEdit: r.runOnEdit === true ? true : undefined,
+                    substituteRegex: typeof r.substituteRegex === "number" ? r.substituteRegex : undefined,
+                    minDepth: typeof r.minDepth === "number" && !Number.isNaN(r.minDepth) ? r.minDepth : undefined,
+                    maxDepth: typeof r.maxDepth === "number" && !Number.isNaN(r.maxDepth) ? r.maxDepth : undefined,
+                };
+            })
+            .filter((item): item is RegexRule => item !== null);
+        return group.rules.length > 0 ? group : null;
+    } catch {
+        return null;
+    }
+}
+
+/** 判断某应用是否允许使用「线下分组（offline）」的预设与正则（仅独立线下、聊天内线下模式、番外馆、黑市小剧场允许） */
+export function isOfflinePresetScopeAllowed(appId?: string, appTags?: string[]): boolean {
+    if (appId === "offline_chat" || appId === "spinoff" || appId === "black_market_theater") return true;
+    if (appTags && (appTags.includes("offline") || appTags.includes("black_market_theater") || appTags.includes("spinoff"))) return true;
+    return false;
+}
+
+/** 为具体业务场景过滤可用预设（非线下/小剧场自动剔除 presetGroup === "offline" 的预设） */
+export function filterPresetsForScope(presets: PresetConfig[], allowOfflineGroup: boolean): PresetConfig[] {
+    if (allowOfflineGroup) return presets;
+    return presets.filter(p => p.presetGroup !== "offline");
+}
+
+/** 为具体业务场景过滤可用正则组（非线下/小剧场自动剔除 regexGroup === "offline" 的正则组） */
+export function filterRegexesForScope(regexes: RegexConfig[], allowOfflineGroup: boolean): RegexConfig[] {
+    if (allowOfflineGroup) return regexes;
+    return regexes.filter(r => r.regexGroup !== "offline");
 }
 
 // --- WorldBooks ──────────────────────────────────────────
@@ -974,6 +1367,7 @@ export function removeApiConfigReferences(apiConfigId: string): void {
         "mascotApiConfigId",
         "qaApiConfigId",
         "reasoningTranslateApiConfigId",
+        "secondaryApiConfigId",
     ] as const;
     for (const field of auxFields) {
         if (next[field] === apiConfigId) {
@@ -1001,9 +1395,21 @@ export function setCharacterBinding(config: BindingConfig, binding: CharacterBin
     return { ...config, characterBindings: newBindings };
 }
 
+/** 默认走「副 API（secondaryApiConfigId）」分流的周边/后台应用集合 */
+const SECONDARY_API_APP_IDS = new Set<string>([
+    "moments",
+    "xiaohongshu",
+    "diary",
+    "checkphone",
+    "calendar",
+    "shopping",
+    "dwelling",
+]);
+
 /**
  * Cascade resolution: global defaults → character defaults → app overrides.
  * undefined/empty fields mean "inherit from parent level".
+ * 若设置了全局「副 API（secondaryApiConfigId）」，朋友圈等周边软件在没有专门配置该软件级 API 覆盖时自动走副 API！
  */
 export function resolveBinding(
     config: BindingConfig,
@@ -1031,12 +1437,23 @@ export function resolveBinding(
         if (slot.regexIds && slot.regexIds.length > 0) resolved.regexIds = [...slot.regexIds];
     };
 
-    if (!characterId) return resolved;
+    const useSecondaryForApp = Boolean(appId && SECONDARY_API_APP_IDS.has(appId) && config.secondaryApiConfigId);
+    if (!characterId) {
+        if (useSecondaryForApp && !config.appDefaults?.[appId!]?.apiConfigId) {
+            resolved.apiConfigId = config.secondaryApiConfigId;
+        }
+        return resolved;
+    }
 
     // Apply character defaults
     const charBinding = config.characterBindings.find(b => b.characterId === characterId);
     if (charBinding) {
         applySlot(charBinding.defaults);
+    }
+
+    // 副 API 介入：朋友圈等后台/周边软件在尚未针对该 App 单独绑定 API 前，默认切换为副 API
+    if (useSecondaryForApp) {
+        resolved.apiConfigId = config.secondaryApiConfigId;
     }
 
     if (appId && config.appDefaults?.[appId]) {
@@ -1110,7 +1527,7 @@ export function applyWorldBookEntryOverrides(
  * Falls back to global default apiConfigId if not explicitly set.
  */
 export function resolveAuxiliaryApiConfig(
-    field: "memorySummaryApiConfigId" | "embeddingApiConfigId" | "mascotApiConfigId" | "reasoningTranslateApiConfigId" | "qaApiConfigId"
+    field: "memorySummaryApiConfigId" | "embeddingApiConfigId" | "mascotApiConfigId" | "reasoningTranslateApiConfigId" | "qaApiConfigId" | "secondaryApiConfigId"
 ): ApiConfig | null {
     const config = loadBindingConfig();
     const apiConfigs = loadApiConfigs();

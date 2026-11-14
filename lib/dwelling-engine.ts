@@ -29,14 +29,14 @@ function resolveDwellingConfigs(characterId: string) {
     const apiConfigs = loadApiConfigs();
     const apiConfig = apiConfigs.find(c => c.id === slot.apiConfigId) ?? apiConfigs[0];
 
-    const presets = loadPresets();
+    const presets = loadPresets().filter(p => p.presetGroup !== "offline");
     let preset = slot.presetId ? presets.find(p => p.id === slot.presetId) ?? null : null;
     if (!preset) preset = presets.find(p => p.builtIn) ?? null;
 
     const allWbs = loadWorldBooks();
     const worldBooks = (slot.worldBookIds || []).map(id => allWbs.find(w => w.id === id)).filter(Boolean) as WorldBookConfig[];
 
-    const allRegexes = loadRegexes();
+    const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
     const regexes = (slot.regexIds || []).map(id => allRegexes.find(r => r.id === id)).filter(Boolean) as RegexConfig[];
 
     return { apiConfig, preset, worldBooks, regexes };

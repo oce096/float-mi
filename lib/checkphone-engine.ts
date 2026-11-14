@@ -97,9 +97,9 @@ function resolveCheckPhoneConfigs(characterId: string): {
 } {
   const binding = resolveBinding(loadBindingConfig(), characterId, "checkphone");
   const apiConfigs = loadApiConfigs();
-  const presets = loadPresets();
+  const presets = loadPresets().filter(p => p.presetGroup !== "offline");
   const allWorldBooks = loadWorldBooks();
-  const allRegexes = loadRegexes();
+  const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
 
   const apiConfig = apiConfigs.find((item) => item.id === binding.apiConfigId) ?? apiConfigs[0] ?? null;
   const preset = presets.find((item) => item.id === binding.presetId) ?? presets[0] ?? null;

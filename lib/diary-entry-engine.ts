@@ -37,7 +37,7 @@ async function resolveDiaryEntryGeneration(
   const apiConfig = loadApiConfigs().find(entry => entry.id === slot.apiConfigId);
   if (!apiConfig) throw new ChatEngineError(`找不到 ${character.name} 的 API 配置。`);
 
-  const presets = loadPresets();
+  const presets = loadPresets().filter(p => p.presetGroup !== "offline");
   let preset = slot.presetId ? presets.find(entry => entry.id === slot.presetId) ?? null : null;
   if (!preset) preset = presets.find(entry => entry.builtIn) ?? null;
 
@@ -46,7 +46,7 @@ async function resolveDiaryEntryGeneration(
     .map(id => allWorldBooks.find(entry => entry.id === id))
     .filter(Boolean) as WorldBookConfig[];
 
-  const allRegexes = loadRegexes();
+  const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
   const regexes = (slot.regexIds || [])
     .map(id => allRegexes.find(entry => entry.id === id))
     .filter(Boolean) as RegexConfig[];

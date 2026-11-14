@@ -257,10 +257,10 @@ export function loadInterviewContextForGuests(characterIds: string[], userIdenti
   if (ids.length === 0) throw new ChatEngineError("请选择至少一位有效角色。");
   const allCharacters = loadCharacters();
   const bindings = loadBindingConfig();
-  const presets = loadPresets();
+  const presets = loadPresets().filter(p => p.presetGroup !== "offline");
   const apiConfigs = loadApiConfigs();
   const allWorldBooks = loadWorldBooks();
-  const allRegexes = loadRegexes();
+  const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
   const guests = ids.map((id) => {
     const character = allCharacters.find((item) => item.id === id);
     if (!character) throw new ChatEngineError(`找不到受访角色：${id}`);

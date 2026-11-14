@@ -7,6 +7,7 @@ import {
     saveRegexes,
     createRegexGroup,
     parseRegexFromJson,
+    parseOfflineRegexFromJson,
     UNSUPPORTED_IMPORT_FORMAT,
 } from "@/lib/settings-storage";
 import type { RegexConfig, RegexRule } from "@/lib/settings-types";
@@ -208,6 +209,7 @@ export function RegexManager({ isActive = true }: { isActive?: boolean } = {}) {
     const [groupTestInput, setGroupTestInput] = useState("");
     const [groupTestExpandStep, setGroupTestExpandStep] = useState<number | null>(null);
     const [importError, setImportError] = useState<string | null>(null);
+    const [regexGroupTab, setRegexGroupTab] = useState<"online" | "offline">("online");
     const [customApps, setCustomApps] = useState<InstalledCustomApp[]>([]);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -293,11 +295,15 @@ export function RegexManager({ isActive = true }: { isActive?: boolean } = {}) {
 
     // --- Group Level Operations ---
     const addGroup = useCallback(() => {
-        const newGroup = createRegexGroup("新正则组");
+        const newGroup = createRegexGroup(regexGroupTab === "offline" ? "新线下正则组" : "新正则组");
+        if (regexGroupTab === "offline") {
+            newGroup.regexGroup = "offline";
+            newGroup.description = "线下专属正则（仅在线下与番外馆/小剧场生效）";
+        }
         persist([newGroup, ...groups]);
         setActiveGroupId(newGroup.id);
         setViewMode("detail");
-    }, [groups, persist]);
+    }, [groups, persist, regexGroupTab]);
 
     useEffect(() => {
         if (viewMode !== "list") {
@@ -351,8 +357,18 @@ export function RegexManager({ isActive = true }: { isActive?: boolean } = {}) {
             try {
                 const text = event.target?.result as string;
                 const fallbackName = file.name.replace(/\.json$/i, "") || "导入的正则组";
+                if (regexGroupTab === "offline") {
+                    const offlineParsed = parseOfflineRegexFromJson(text, fallbackName);
+                    if (offlineParsed) {
+                        const scoped = normalizeGroupScope(offlineParsed);
+                        persist([scoped, ...groups]);
+                        setActiveGroupId(scoped.id);
+                        return;
+                    }
+                }
                 const parsed = parseRegexFromJson(text, fallbackName);
                 if (parsed) {
+                    if (regexGroupTab === "offline") parsed.regexGroup = "offline";
                     const scoped = normalizeGroupScope(parsed);
                     persist([scoped, ...groups]);
                     setActiveGroupId(scoped.id);
@@ -361,7 +377,7 @@ export function RegexManager({ isActive = true }: { isActive?: boolean } = {}) {
                 }
             } catch (e) {
                 if (e instanceof Error && e.message === UNSUPPORTED_IMPORT_FORMAT) {
-                    setImportError("不支持该正则格式");
+                    setImportError(regexGroupTab === "offline" ? "无法解析该酒馆正则文件" : "不支持该正则格式（酒馆正则请切换到「线下/小剧场分组」导入）");
                 } else {
                     setImportError("无法解析正则文件，格式不正确。");
                 }
@@ -535,58 +551,101 @@ export function RegexManager({ isActive = true }: { isActive?: boolean } = {}) {
             <input type="file" accept=".json" className="hidden" ref={ruleFileInputRef} onChange={handleRuleImportFile} />
             {viewMode === "list" ? (
                 <>
-                    <div className="flex items-center">
-                        <h2 className="m-0 mx-2 ts-28 font-bold italic leading-none text-black">Regex</h2>
-                    </div>
-
-                    {groups.length === 0 ? (
-                        <div className="ui-empty mt-2">
-                            <div className="ui-icon-circle">
-                                <Database size={24} />
-                            </div>
-                            <span className="menu-label font-semibold">没有正则组</span>
-                            <span className="menu-desc max-w-[240px]">
-                                正则用于在发送给 AI 或收到 AI 回复时进行高阶的文本替换与格式处理。
-                            </span>
-                            <button onClick={addGroup} className="ui-btn ui-btn-primary mt-2">
-                                <Plus size={16} /> 新建正则组
+                    <div className="flex flex-col gap-3">
+                        <div className="flex items-center">
+                            <h2 className="m-0 mx-2 ts-28 font-bold italic leading-none text-black">Regex</h2>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-[var(--c-input)] p-1">
+                            <button
+                                type="button"
+                                onClick={() => setRegexGroupTab("online")}
+                                className={`py-2 px-3 rounded-xl ts-12 font-bold transition-all ${
+                                    regexGroupTab === "online"
+                                        ? "bg-black text-white shadow-sm"
+                                        : "text-[var(--c-text)] opacity-75"
+                                }`}
+                            >
+                                通用正则 ({groups.filter(g => g.regexGroup !== "offline").length})
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setRegexGroupTab("offline")}
+                                className={`py-2 px-3 rounded-xl ts-12 font-bold transition-all ${
+                                    regexGroupTab === "offline"
+                                        ? "bg-black text-white shadow-sm"
+                                        : "text-[var(--c-text)] opacity-75"
+                                }`}
+                            >
+                                线下 / 小剧场分组 ({groups.filter(g => g.regexGroup === "offline").length})
                             </button>
                         </div>
-                    ) : (
-                        <div className="flex flex-col gap-3">
-                            {groups.map(group => (
-                                <div
-                                    key={group.id}
-                                    className="ui-config-card min-w-0 cursor-pointer"
-                                    style={{ minHeight: "84px", padding: "16px", justifyContent: "space-between" }}
-                                    role="button"
-                                    tabIndex={0}
-                                    aria-label={`编辑 ${group.name || "正则组"}`}
-                                    onClick={() => { setActiveGroupId(group.id); setViewMode("detail"); }}
-                                    onKeyDown={(event) => {
-                                        if (event.target !== event.currentTarget) return;
-                                        if (event.key === "Enter" || event.key === " ") {
-                                            event.preventDefault();
-                                            setActiveGroupId(group.id);
-                                            setViewMode("detail");
-                                        }
-                                    }}
-                                >
-                                    <div className="min-w-0 flex flex-col gap-1.5">
-                                        <div className="min-w-0 flex items-center gap-[6px]">
-                                            <Database size={16} className="shrink-0" />
-                                            <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{group.name}</span>
-                                        </div>
-                                        <span className="menu-desc truncate">{group.description || `${group.rules?.length || 0} 个规则`}</span>
+                    </div>
+
+                    {(() => {
+                        const visibleGroupList = groups.filter(g =>
+                            regexGroupTab === "offline" ? g.regexGroup === "offline" : g.regexGroup !== "offline",
+                        );
+                        if (visibleGroupList.length === 0) {
+                            return (
+                                <div className="ui-empty mt-2">
+                                    <div className="ui-icon-circle">
+                                        <Database size={24} />
                                     </div>
-                                    <div className="flex items-center justify-between gap-2">
-                                        <span className="menu-desc ts-12">规则 {group.rules?.length || 0}</span>
-                                        <ChevronLeft size={16} className="opacity-40" style={{ transform: "rotate(180deg)" }} />
-                                    </div>
+                                    <span className="menu-label font-semibold">
+                                        {regexGroupTab === "offline" ? "暂无线下分组正则" : "没有正则组"}
+                                    </span>
+                                    <span className="menu-desc max-w-[260px]">
+                                        {regexGroupTab === "offline"
+                                            ? "在预设页导入酒馆预设时会自动同步其绑定正则至此，也可点右上角直接导入酒馆正则文件。"
+                                            : "正则用于在发送给 AI 或收到 AI 回复时进行高阶的文本替换与格式处理。"}
+                                    </span>
+                                    <button onClick={addGroup} className="ui-btn ui-btn-primary mt-2">
+                                        <Plus size={16} /> {regexGroupTab === "offline" ? "新建线下正则组" : "新建正则组"}
+                                    </button>
                                 </div>
-                            ))}
-                        </div>
-                    )}
+                            );
+                        }
+                        return (
+                            <div className="flex flex-col gap-3">
+                                {visibleGroupList.map(group => (
+                                    <div
+                                        key={group.id}
+                                        className="ui-config-card min-w-0 cursor-pointer"
+                                        style={{ minHeight: "84px", padding: "16px", justifyContent: "space-between" }}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={`编辑 ${group.name || "正则组"}`}
+                                        onClick={() => { setActiveGroupId(group.id); setViewMode("detail"); }}
+                                        onKeyDown={(event) => {
+                                            if (event.target !== event.currentTarget) return;
+                                            if (event.key === "Enter" || event.key === " ") {
+                                                event.preventDefault();
+                                                setActiveGroupId(group.id);
+                                                setViewMode("detail");
+                                            }
+                                        }}
+                                    >
+                                        <div className="min-w-0 flex flex-col gap-1.5">
+                                            <div className="min-w-0 flex items-center gap-[6px]">
+                                                <Database size={16} className="shrink-0" />
+                                                <span className="truncate text-[calc(14.4px*var(--app-text-scale,1))] font-bold leading-tight text-[var(--c-text-title)]">{group.name}</span>
+                                                {group.regexGroup === "offline" && (
+                                                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 shrink-0">
+                                                        线下/小剧场专属
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <span className="menu-desc truncate">{group.description || `${group.rules?.length || 0} 个规则`}</span>
+                                        </div>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="menu-desc ts-12">规则 {group.rules?.length || 0}</span>
+                                            <ChevronLeft size={16} className="opacity-40" style={{ transform: "rotate(180deg)" }} />
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        );
+                    })()}
                 </>
             ) : (
                 <>
@@ -633,6 +692,21 @@ export function RegexManager({ isActive = true }: { isActive?: boolean } = {}) {
                                         rows={2}
                                         className="ui-textarea resize-none"
                                     />
+                                </div>
+
+                                <div className="flex items-center justify-between gap-2 pt-1">
+                                    <div className="flex flex-col">
+                                        <span className="menu-label ts-13 font-semibold ml-1">所属正则分组</span>
+                                        <span className="ts-11 text-[var(--c-icon)] ml-1">线下分组仅在线下与番外馆/小剧场中生效</span>
+                                    </div>
+                                    <select
+                                        value={activeGroup.regexGroup === "offline" ? "offline" : "online"}
+                                        onChange={(e) => updateGroup(activeGroup.id, { regexGroup: e.target.value === "offline" ? "offline" : undefined })}
+                                        className="ui-select !w-auto !py-1.5 !px-3 ts-12"
+                                    >
+                                        <option value="online">通用分组</option>
+                                        <option value="offline">线下/小剧场专属</option>
+                                    </select>
                                 </div>
                             </div>
 

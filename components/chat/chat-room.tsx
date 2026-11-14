@@ -45,7 +45,7 @@ import { ConfirmDialog } from "@/components/ui/modal";
 import { deleteWeixinCloudMessagesFromCloud, emitWeixinSyncToast, syncAllWeixinBotRuntimesToCloud } from "@/lib/weixin-cloud-sync";
 import { loadBindingConfig, loadPresets, loadRegexes, resolveBinding, resolveUserIdentity } from "@/lib/settings-storage";
 import { generateGroupChatCompletion, generateGroupOfflineChatCompletion, parseGroupChatResponse, buildEditableGroupRoundText } from "@/lib/group-chat-engine";
-import { appendChatOfflineTurn, deleteChatOfflineTurn, deleteChatOfflineTurnsFrom, extractThinkingTag, loadChatOfflineTurns, parseOfflineResponse, saveChatOfflineTurns, updateChatOfflineTurn, type ChatOfflineTurn } from "@/lib/chat-offline-storage";
+import { appendChatOfflineTurn, deleteChatOfflineTurn, deleteChatOfflineTurnsFrom, extractThinkingTag, loadChatOfflineTurns, parseOfflineResponse, saveChatOfflineTurns, updateChatOfflineTurn, type ChatOfflineTurn, type ChatOfflineSwipeAlternative } from "@/lib/chat-offline-storage";
 import { loadOfflineSessionConfig, OFFLINE_STUDIO_UPDATED_EVENT } from "@/lib/offline-studio-storage";
 import { applyDisplayRegex, applyEditRegex } from "@/lib/llm-prompt-assembler";
 import { scheduleFollowUp, cancelFollowUp, cancelBackgroundGeneration, isBackgroundReplyGenerating } from "@/lib/follow-up-service";
@@ -53,7 +53,8 @@ import { useKeyboardDismissAutoSend } from "@/components/chat/use-keyboard-dismi
 import { cancelBailoutKey } from "@/lib/push-bailout-client";
 import { PENDING_REPLY_PREFIX } from "@/lib/friend-request-engine";
 import type { UserIdentity } from "@/components/settings/user-identity";
-import { AlertCircle, Blocks, Check, Trash2, User, ChevronLeft, ChevronRight, Clapperboard, Clock, Gift, Languages, Loader2, MoreHorizontal, X } from "lucide-react";
+import { AlertCircle, Blocks, Check, Trash2, User, ChevronLeft, ChevronRight, Clapperboard, Clock, Gift, Languages, Loader2, MoreHorizontal, RotateCcw, SlidersHorizontal, X } from "lucide-react";
+import { OfflineStudioDrawer } from "@/components/chat/offline-chat-app";
 import { setDebugChatState } from "@/lib/debug-store";
 import { SessionCustomCSS } from "@/components/ui/session-custom-css";
 import { setChatActive } from "@/lib/music-action-queue";
@@ -1124,6 +1125,7 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
     const [customPlusActions, setCustomPlusActions] = useState<RegisteredCustomAppChatPlusAction[]>(() => loadCustomAppChatPlusActions());
     const [activeCustomChatPlus, setActiveCustomChatPlus] = useState<ActiveCustomChatPlus | null>(null);
     const [showSettings, setShowSettings] = useState(false);
+    const [showInlineOfflineStudio, setShowInlineOfflineStudio] = useState(false);
     const [showVoiceCall, setShowVoiceCall] = useState(false);
     const [showVideoCall, setShowVideoCall] = useState(false);
     const [callMinimized, setCallMinimized] = useState(false);
@@ -1579,14 +1581,33 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
     const groupCharacters = useMemo(() => [...groupCharMap.values()], [groupCharMap]);
     const groupCharacterNames = useMemo(() => groupCharacters.map(item => item.name).filter(Boolean).join("、"), [groupCharacters]);
 
-    const activeRegexes = useMemo<RegexConfig[]>(() => {
+    const onlineRegexes = useMemo<RegexConfig[]>(() => {
         const bindings = loadBindingConfig();
         const activeSlot = resolveBinding(bindings, session.isGroup ? undefined : session.contactId, session.isGroup ? "group_chat" : "chat");
-        const allRegexes = loadRegexes();
+        const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
         return (activeSlot.regexIds || [])
             .map(id => allRegexes.find(regex => regex.id === id))
             .filter((regex): regex is RegexConfig => Boolean(regex));
     }, [regexRevision, session.contactId, session.isGroup]);
+
+    const offlineRegexes = useMemo<RegexConfig[]>(() => {
+        const bindings = loadBindingConfig();
+        const activeSlot = resolveBinding(bindings, session.isGroup ? undefined : session.contactId, "offline_chat");
+        const studioCfg = loadOfflineSessionConfig(session.id);
+        const allPresets = loadPresets();
+        const effectivePreset = (studioCfg.presetId ? allPresets.find(p => p.id === studioCfg.presetId) : null)
+            || (activeSlot.presetId ? allPresets.find(p => p.id === activeSlot.presetId) : null)
+            || null;
+        const allRegexes = loadRegexes();
+        const mergedIds = Array.from(new Set([
+            ...(activeSlot.regexIds || []),
+            ...(studioCfg.regexIds || []),
+            ...(effectivePreset?.boundRegexGroupIds || []),
+        ]));
+        return mergedIds
+            .map(id => allRegexes.find(regex => regex.id === id))
+            .filter((regex): regex is RegexConfig => Boolean(regex));
+    }, [regexRevision, session.id, session.contactId, session.isGroup]);
 
     // 流式预览的标签净化配置：与引擎同源（当前会话绑定的预设）。预设开启标签式思维链时，
     // 生成过程中的预览也要按同一套标签剥掉思考过程/摘要，否则最终消息里被引擎剥掉的内容
@@ -1594,22 +1615,27 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
     const streamPreviewTagConfig = useMemo(() => {
         const bindings = loadBindingConfig();
         const slot = resolveBinding(bindings, session.isGroup ? undefined : session.contactId, session.isGroup ? "group_chat" : "chat");
-        const preset = loadPresets().find(item => item.id === slot.presetId) || null;
+        const offlineSlot = resolveBinding(bindings, session.isGroup ? undefined : session.contactId, "offline_chat");
         const studioCfg = loadOfflineSessionConfig(session.id);
+        const allPresets = loadPresets();
+        const onlinePreset = allPresets.filter(p => p.presetGroup !== "offline").find(item => item.id === slot.presetId) || null;
+        const preset = (studioCfg.presetId ? allPresets.find(item => item.id === studioCfg.presetId) : null)
+            || (offlineSlot.presetId ? allPresets.find(item => item.id === offlineSlot.presetId) : null)
+            || onlinePreset;
         const withThoughtCompat = (tag: string): string[] => (tag === "thinking" ? ["thinking", "thought", "think"] : [tag]);
         const offlineTag = studioCfg.cotEnabled
             ? (studioCfg.cotTag?.trim() || "thinking")
             : (preset?.offline_thinking_enabled === true ? (preset.thinking_tag?.trim() || "thinking") : "");
         return {
-            online: preset?.online_thinking_enabled === true
-                ? withThoughtCompat(preset.online_thinking_tag?.trim() || "thinking")
+            online: onlinePreset?.online_thinking_enabled === true
+                ? withThoughtCompat(onlinePreset.online_thinking_tag?.trim() || "thinking")
                 : [],
             offlineThinking: offlineTag ? withThoughtCompat(offlineTag) : [],
             summaryTag: preset?.story_summary_tag?.trim() || "summary",
             // 预设「剔除文本」：引擎最终会删，预览阶段同步删，避免闪现（字面量删除，成本极低）
-            stripTexts: (preset?.strip_texts || []).filter(Boolean),
+            stripTexts: ((offlineMode ? preset?.strip_texts : onlinePreset?.strip_texts) || []).filter(Boolean),
         };
-    }, [regexRevision, session.id, session.contactId, session.isGroup]);
+    }, [regexRevision, session.id, session.contactId, session.isGroup, offlineMode]);
 
     const displayRegexMacroEngine = useMemo(() => {
         const charName = session.isGroup
@@ -1631,12 +1657,13 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
         placement: 1 | 2 | 5 | 6,
         isOffline = false,
     ) => {
-        if (!text || activeRegexes.length === 0) return text;
-        return applyDisplayRegex(text, activeRegexes, placement, {
+        const targetRegexes = isOffline ? offlineRegexes : onlineRegexes;
+        if (!text || targetRegexes.length === 0) return text;
+        return applyDisplayRegex(text, targetRegexes, placement, {
             macroEngine: displayRegexMacroEngine,
             activeTags: getRegexActiveTags(isOffline),
         });
-    }, [activeRegexes, displayRegexMacroEngine, getRegexActiveTags]);
+    }, [onlineRegexes, offlineRegexes, displayRegexMacroEngine, getRegexActiveTags]);
 
     const getMessageDisplayContent = useCallback((message: RenderChatMessage): string => (
         message.displayProjected
@@ -1649,12 +1676,13 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
         placement: 1 | 2 | 5 | 6,
         isOffline = false,
     ) => {
-        if (!text || activeRegexes.length === 0) return text;
-        return applyEditRegex(text, activeRegexes, placement, {
+        const targetRegexes = isOffline ? offlineRegexes : onlineRegexes;
+        if (!text || targetRegexes.length === 0) return text;
+        return applyEditRegex(text, targetRegexes, placement, {
             macroEngine: displayRegexMacroEngine,
             activeTags: getRegexActiveTags(isOffline),
         });
-    }, [activeRegexes, displayRegexMacroEngine, getRegexActiveTags]);
+    }, [onlineRegexes, offlineRegexes, displayRegexMacroEngine, getRegexActiveTags]);
 
     // 「丢弃角色输出的无效表情包」开关：滤除名称不在角色表情包/内置表情中的 sticker part
     const stripInvalidStickerParts = useCallback((parts: ParsedMessagePart[], senderCharacterId?: string): ParsedMessagePart[] => {
@@ -4292,6 +4320,128 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
         setActiveOfflineTarget(null);
     };
 
+    // 酒馆同款：最新一幕切换已生成的候选回复（swipes）或向左滑/点击重 roll 生成新分支
+    const handleOfflineSelectSwipe = (turn: ChatOfflineTurn, nextIndex: number) => {
+        const swipes = turn.swipes;
+        if (!swipes || nextIndex < 0 || nextIndex >= swipes.length) return;
+        const chosen = swipes[nextIndex];
+        const updated = updateChatOfflineTurn(session.id, turn.id, {
+            assistantContent: chosen.assistantContent,
+            summary: chosen.summary,
+            summaryTag: chosen.summaryTag,
+            rawText: chosen.rawText,
+            reasoningText: chosen.reasoningText,
+            thinkingText: chosen.thinkingText,
+            thinkingTag: chosen.thinkingTag,
+            swipes,
+            swipeIndex: nextIndex,
+        });
+        if (updated) {
+            setOfflineTurns(prev => prev.map(item => item.id === updated.id ? updated : item));
+        }
+    };
+
+    const handleOfflineSwipeReroll = async (turnId: string) => {
+        if (isOfflineGenerating) {
+            showChatToast("线下回复生成中");
+            return;
+        }
+        const idx = offlineTurns.findIndex(t => t.id === turnId);
+        if (idx < 0 || idx !== offlineTurns.length - 1) return;
+        const targetTurn = offlineTurns[idx];
+        const baseTurns = offlineTurns.slice(0, idx);
+        const retryInput = targetTurn.userContent.trim();
+        if (!retryInput && !(session.isGroup && session.isSpectator)) {
+            showChatToast("这一轮没有可重 roll 的输入");
+            return;
+        }
+
+        const existingSwipes: ChatOfflineSwipeAlternative[] = targetTurn.swipes && targetTurn.swipes.length > 0
+            ? [...targetTurn.swipes]
+            : [{
+                assistantContent: targetTurn.assistantContent,
+                summary: targetTurn.summary,
+                summaryTag: targetTurn.summaryTag,
+                rawText: targetTurn.rawText,
+                reasoningText: targetTurn.reasoningText,
+                thinkingText: targetTurn.thinkingText,
+                thinkingTag: targetTurn.thinkingTag,
+                createdAt: targetTurn.createdAt,
+            }];
+
+        cancelFollowUp(session.id);
+        setActiveOfflineTarget(null);
+        setIsOfflineGenerating(true);
+        offlineStreamAccumRef.current = "";
+        setOfflineStreamPreview(null);
+        const offlineRun = createOfflineGenerationRun(session.id);
+        const offlineRunId = offlineRun.runId;
+        const isCurrentOfflineRun = () => isOfflineGenerationRunActive(session.id, offlineRunId);
+
+        try {
+            const history = buildOfflinePromptHistory(baseTurns, retryInput);
+            const onOfflineDelta = (delta: string) => {
+                if (!isCurrentOfflineRun()) return;
+                offlineStreamAccumRef.current += delta;
+                if (offlineStreamFrameRef.current) return;
+                offlineStreamFrameRef.current = window.requestAnimationFrame(() => {
+                    offlineStreamFrameRef.current = 0;
+                    if (!isCurrentOfflineRun()) return;
+                    const previewRaw = stripLiteralTexts(offlineStreamAccumRef.current, streamPreviewTagConfig.stripTexts);
+                    const parsed = parseOfflineResponse(previewRaw, streamPreviewTagConfig.summaryTag);
+                    const previewContent = (parsed.content
+                        ? stripXmlTagBlocks(parsed.content, [streamPreviewTagConfig.summaryTag, ...streamPreviewTagConfig.offlineThinking])
+                        : stripXmlTagBlocks(previewRaw, [streamPreviewTagConfig.summaryTag, ...streamPreviewTagConfig.offlineThinking])
+                            .replace(/<\/?(?:content|summary|thinking|thought|think)>/gi, "")
+                            .replace(/<[^>]+>/g, "")
+                    ).trim();
+                    setOfflineStreamPreview({ content: previewContent, summary: parsed.summary });
+                });
+            };
+            const result = session.isGroup
+                ? await generateGroupOfflineChatCompletion(session, history, { signal: offlineRun.controller.signal, onStreamDelta: onOfflineDelta })
+                : await generateOfflineChatCompletion(session, history, { signal: offlineRun.controller.signal, onStreamDelta: onOfflineDelta });
+            if (!isCurrentOfflineRun()) return;
+            const assistantContent = result.content.trim() || result.rawText.trim();
+            if (!assistantContent) throw new Error("AI 没有返回线下正文");
+
+            const newAlt: ChatOfflineSwipeAlternative = {
+                assistantContent,
+                summary: result.summary.trim(),
+                summaryTag: result.summaryTag,
+                rawText: result.rawText,
+                reasoningText: result.reasoning,
+                thinkingText: result.thinking,
+                thinkingTag: result.thinkingTag,
+                createdAt: new Date().toISOString(),
+            };
+            const nextSwipes = [...existingSwipes, newAlt];
+            const nextIdx = nextSwipes.length - 1;
+            const updated = updateChatOfflineTurn(session.id, targetTurn.id, {
+                assistantContent: newAlt.assistantContent,
+                summary: newAlt.summary,
+                summaryTag: newAlt.summaryTag,
+                rawText: newAlt.rawText,
+                reasoningText: newAlt.reasoningText,
+                thinkingText: newAlt.thinkingText,
+                thinkingTag: newAlt.thinkingTag,
+                swipes: nextSwipes,
+                swipeIndex: nextIdx,
+            });
+            if (updated) {
+                setOfflineTurns(prev => prev.map(item => item.id === updated.id ? updated : item));
+            }
+        } catch (error: any) {
+            if (!isCurrentOfflineRun() || isAbortLikeError(error)) return;
+            showChatToast(`重 roll 失败: ${error?.message || String(error)}`, 3000);
+        } finally {
+            if (!finishOfflineGenerationRun(session.id, offlineRunId)) return;
+            setIsOfflineGenerating(false);
+            offlineStreamAccumRef.current = "";
+            setOfflineStreamPreview(null);
+        }
+    };
+
     const handleOfflineRetryFrom = async (turnId: string) => {
         if (isOfflineGenerating) {
             showChatToast("线下回复生成中");
@@ -5451,7 +5601,18 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
                             </span>
                         )}
                     </span>
-                    <span className="page-header-right">
+                    <span className="page-header-right flex items-center gap-0.5">
+                        {offlineMode && !forceOffline && (
+                            <button
+                                className="page-back-btn"
+                                type="button"
+                                onClick={() => setShowInlineOfflineStudio(true)}
+                                aria-label="线下场记台配置"
+                                title="线下独立 API · 预设正则 · 世界书 · 思维链 · 文风"
+                            >
+                                <SlidersHorizontal size={19} strokeWidth={1.6} />
+                            </button>
+                        )}
                         <button className="page-back-btn" type="button" onClick={() => setShowSettings(true)} aria-label="更多">
                             <MoreHorizontal size={22} strokeWidth={1.5} />
                         </button>
@@ -5614,6 +5775,56 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
                                                 />
                                             </div>
                                         </details>
+                                    )}
+                                    {/* 最新一轮线下回复的酒馆式重 roll 分支切换条（一旦推进下一幕会自动定稿隐藏） */}
+                                    {turnIdx === visibleOfflineTurns.length - 1 && !isOfflineGenerating && (
+                                        <div className="mt-1.5 flex items-center justify-end gap-1.5 text-[11px] text-[var(--c-icon)] select-none">
+                                            {turn.swipes && turn.swipes.length > 1 && (
+                                                <div className="inline-flex items-center gap-1 rounded-full bg-[var(--c-input)] px-2 py-0.5">
+                                                    <button
+                                                        type="button"
+                                                        disabled={(turn.swipeIndex ?? turn.swipes.length - 1) <= 0}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            const cur = turn.swipeIndex ?? (turn.swipes!.length - 1);
+                                                            if (cur > 0) handleOfflineSelectSwipe(turn, cur - 1);
+                                                        }}
+                                                        className="ui-bare-btn disabled:opacity-30 px-0.5"
+                                                        aria-label="上一候选回复"
+                                                    >
+                                                        <ChevronLeft size={13} />
+                                                    </button>
+                                                    <span className="font-mono text-[10.5px]">
+                                                        {(turn.swipeIndex ?? (turn.swipes.length - 1)) + 1} / {turn.swipes.length}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        disabled={(turn.swipeIndex ?? turn.swipes.length - 1) >= turn.swipes.length - 1}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            const cur = turn.swipeIndex ?? (turn.swipes!.length - 1);
+                                                            if (cur < turn.swipes!.length - 1) handleOfflineSelectSwipe(turn, cur + 1);
+                                                        }}
+                                                        className="ui-bare-btn disabled:opacity-30 px-0.5"
+                                                        aria-label="下一候选回复"
+                                                    >
+                                                        <ChevronRight size={13} />
+                                                    </button>
+                                                </div>
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    void handleOfflineSwipeReroll(turn.id);
+                                                }}
+                                                className="inline-flex items-center gap-1 rounded-full bg-[var(--c-input)] px-2.5 py-0.5 text-[11px] text-[var(--c-text)] opacity-80 hover:opacity-100 transition-opacity"
+                                                title="重 roll 本幕新分支（保留原回复可左右翻看）"
+                                            >
+                                                <RotateCcw size={11} />
+                                                <span>重 roll</span>
+                                            </button>
+                                        </div>
                                     )}
                                 </div>
                             </div>
@@ -6720,6 +6931,15 @@ export function ChatRoom({ session, onBack, onDeleted, forceOffline = false }: C
                         </div>
                     </div>
                 </div>
+            )}
+
+            {showInlineOfflineStudio && (
+                <OfflineStudioDrawer
+                    session={session}
+                    character={character}
+                    onClose={() => setShowInlineOfflineStudio(false)}
+                    onToast={showChatToast}
+                />
             )}
 
             {imageGenerationFailure && (

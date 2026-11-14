@@ -155,7 +155,7 @@ async function resolveCalendarAssemblerInput(
     throw new Error("日历 API 配置不存在。");
   }
 
-  const presets = loadPresets();
+  const presets = loadPresets().filter(p => p.presetGroup !== "offline");
   let preset = activeSlot.presetId ? presets.find(entry => entry.id === activeSlot.presetId) ?? null : null;
   if (!preset) preset = presets.find(entry => entry.builtIn) ?? null;
 
@@ -164,7 +164,7 @@ async function resolveCalendarAssemblerInput(
     .map(id => allWorldBooks.find(entry => entry.id === id))
     .filter(Boolean) as WorldBookConfig[];
 
-  const allRegexes = loadRegexes();
+  const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
   const regexes = (activeSlot.regexIds || [])
     .map(id => allRegexes.find(entry => entry.id === id))
     .filter(Boolean) as RegexConfig[];

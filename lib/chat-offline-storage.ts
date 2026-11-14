@@ -5,6 +5,17 @@ import { kvGet, kvRemove, kvSet, registerDynamicPrefix } from "./kv-db";
 const CHAT_OFFLINE_TURNS_PREFIX = "ai_phone_chat_offline_turns:";
 registerDynamicPrefix(CHAT_OFFLINE_TURNS_PREFIX);
 
+export type ChatOfflineSwipeAlternative = {
+    assistantContent: string;
+    summary: string;
+    summaryTag: string;
+    rawText?: string;
+    reasoningText?: string;
+    thinkingText?: string;
+    thinkingTag?: string;
+    createdAt: string;
+};
+
 export type ChatOfflineTurn = {
     id: string;
     sessionId: string;
@@ -16,6 +27,9 @@ export type ChatOfflineTurn = {
     reasoningText?: string; // 模型思维链（reasoning/CoT）内容
     thinkingText?: string; // 预设格式 <thinking> 标签解析出的思维链（展示优先于 reasoningText）
     thinkingTag?: string; // 实际用于提取思维链的标签名（preset.thinking_tag 或默认 thinking）
+    /** 酒馆同款左滑重 roll 分支记录（仅最新一轮未推进时有效，一旦推进下一幕会自动定稿清空） */
+    swipes?: ChatOfflineSwipeAlternative[];
+    swipeIndex?: number;
     createdAt: string;
 };
 
@@ -61,6 +75,8 @@ function normalizeTurn(value: unknown): ChatOfflineTurn | null {
         reasoningText: typeof item.reasoningText === "string" ? item.reasoningText : undefined,
         thinkingText: typeof item.thinkingText === "string" ? item.thinkingText : undefined,
         thinkingTag: typeof item.thinkingTag === "string" ? item.thinkingTag : undefined,
+        swipes: Array.isArray(item.swipes) && item.swipes.length > 0 ? item.swipes : undefined,
+        swipeIndex: typeof item.swipeIndex === "number" ? item.swipeIndex : undefined,
         createdAt: item.createdAt,
     };
 }
@@ -115,14 +131,20 @@ export function appendChatOfflineTurn(input: {
         thinkingTag: input.thinkingTag,
         createdAt: new Date().toISOString(),
     };
-    saveChatOfflineTurns(input.sessionId, [...loadChatOfflineTurns(input.sessionId), turn]);
+    // 酒馆规则：剧情一旦往前推进了新的一幕，前面所有条目自动锁定定稿，清空过往 swipes 候选分支！
+    const lockedPrevTurns = loadChatOfflineTurns(input.sessionId).map(prev => {
+        if (!prev.swipes && prev.swipeIndex === undefined) return prev;
+        const { swipes: _s, swipeIndex: _i, ...locked } = prev;
+        return locked;
+    });
+    saveChatOfflineTurns(input.sessionId, [...lockedPrevTurns, turn]);
     return turn;
 }
 
 export function updateChatOfflineTurn(
     sessionId: string,
     turnId: string,
-    patch: Partial<Pick<ChatOfflineTurn, "userContent" | "assistantContent" | "summary" | "summaryTag" | "rawText" | "reasoningText" | "thinkingText" | "thinkingTag">>,
+    patch: Partial<Pick<ChatOfflineTurn, "userContent" | "assistantContent" | "summary" | "summaryTag" | "rawText" | "reasoningText" | "thinkingText" | "thinkingTag" | "swipes" | "swipeIndex">>,
 ): ChatOfflineTurn | null {
     let updated: ChatOfflineTurn | null = null;
     const turns = loadChatOfflineTurns(sessionId).map((turn) => {

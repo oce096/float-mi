@@ -74,7 +74,11 @@ function resolveSceneConfigs(characterId: string): SceneConfigs {
   if (!preset) preset = presets.find(item => item.builtIn) ?? null;
 
   const allRegexes = loadRegexes();
-  const regexes = (activeSlot.regexIds || [])
+  const mergedRegexIds = Array.from(new Set([
+    ...(activeSlot.regexIds || []),
+    ...(preset?.boundRegexGroupIds || []),
+  ]));
+  const regexes = mergedRegexIds
     .map(id => allRegexes.find(regex => regex.id === id))
     .filter(Boolean) as RegexConfig[];
 

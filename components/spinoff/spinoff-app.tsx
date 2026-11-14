@@ -37,6 +37,8 @@ import {
     loadBindingConfig,
     saveBindingConfig,
     loadWorldBooks,
+    loadPresets,
+    loadRegexes,
     resolveBinding,
 } from "@/lib/settings-storage";
 import { CHAT_APP_SETTINGS_UPDATED_EVENT, loadChatAppSettings, saveChatAppSettings } from "@/lib/chat-storage";
@@ -2030,8 +2032,10 @@ function SpinoffStudioModal({
     onClose: () => void;
     onToast: (msg: string) => void;
 }) {
-    const [tab, setTab] = useState<"wb" | "cot" | "style">("wb");
+    const [tab, setTab] = useState<"preset" | "wb" | "cot" | "style">("preset");
     const [cfg, setCfg] = useState<SpinoffCharacterStudioConfig>(() => loadSpinoffCharStudio(character.id));
+    const [presets] = useState(() => loadPresets());
+    const [regexes] = useState(() => loadRegexes());
     const [worldBooks] = useState(() => loadWorldBooks());
     const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
     const [cotPresets, setCotPresets] = useState(() => loadOfflineCotPresets());
@@ -2047,7 +2051,7 @@ function SpinoffStudioModal({
 
     const toggleIndependentWb = (enabled: boolean) => {
         if (enabled && (!cfg.worldBookIds || cfg.worldBookIds.length === 0)) {
-            const slot = resolveBinding(loadBindingConfig(), character.id, "chat");
+            const slot = resolveBinding(loadBindingConfig(), character.id, "spinoff");
             update({
                 useIndependentWorldBooks: true,
                 worldBookIds: slot.worldBookIds ? [...slot.worldBookIds] : [],
@@ -2058,6 +2062,7 @@ function SpinoffStudioModal({
     };
 
     const selectedWbIds = cfg.worldBookIds || [];
+    const selectedRegexIds = cfg.regexIds || [];
     const overrides = cfg.worldBookEntryOverrides || {};
 
     return (
@@ -2076,11 +2081,12 @@ function SpinoffStudioModal({
                     </button>
                 </div>
 
-                <div className="grid grid-cols-3 gap-1.5 px-4 py-2.5 bg-[var(--c-card)]/60 border-b border-black/5">
+                <div className="grid grid-cols-4 gap-1.5 px-4 py-2.5 bg-[var(--c-card)]/60 border-b border-black/5">
                     {([
-                        { id: "wb", label: "番外世界书", icon: BookOpen },
-                        { id: "cot", label: "折叠思维链", icon: Brain },
-                        { id: "style", label: "番外文风", icon: Feather },
+                        { id: "preset", label: "预设正则", icon: SlidersHorizontal },
+                        { id: "wb", label: "世界书", icon: BookOpen },
+                        { id: "cot", label: "思维链", icon: Brain },
+                        { id: "style", label: "文风", icon: Feather },
                     ] as const).map(item => {
                         const Icon = item.icon;
                         const active = tab === item.id;
@@ -2089,7 +2095,7 @@ function SpinoffStudioModal({
                                 key={item.id}
                                 type="button"
                                 onClick={() => setTab(item.id)}
-                                className={`py-2 rounded-xl ts-12 font-semibold flex items-center justify-center gap-1.5 ${
+                                className={`py-2 rounded-xl ts-11 font-semibold flex flex-col items-center justify-center gap-1 ${
                                     active ? "bg-black text-white" : "bg-[var(--c-input)] text-[var(--c-text)]"
                                 }`}
                             >
@@ -2101,6 +2107,75 @@ function SpinoffStudioModal({
                 </div>
 
                 <div className="flex-1 overflow-y-auto px-4 py-3.5 flex flex-col gap-3">
+                    {tab === "preset" && (
+                        <>
+                            <div className="rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5 flex flex-col gap-2">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex flex-col pr-3">
+                                        <span className="ts-13 font-bold text-[var(--c-text-title)]">流式实时输出</span>
+                                        <span className="ts-11 text-[var(--c-icon)]">开启后逐字展开番外书页正文</span>
+                                    </div>
+                                    <Toggle checked={cfg.streamEnabled !== false} onChange={v => update({ streamEnabled: v })} />
+                                </div>
+                            </div>
+
+                            <div className="rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5 flex flex-col gap-2">
+                                <span className="ts-13 font-bold text-[var(--c-text-title)]">番外专用预设（支持「线下专属」分组）</span>
+                                <span className="ts-11 text-[var(--c-icon)]">可为此角色的番外馆单独指定酒馆导入的线下预设，不影响线上聊天</span>
+                                <select
+                                    value={cfg.presetId || ""}
+                                    onChange={e => update({ presetId: e.target.value || undefined })}
+                                    className="ui-select ts-12"
+                                >
+                                    <option value="">— 跟随角色绑定配置 —</option>
+                                    {presets.map(p => (
+                                        <option key={p.id} value={p.id}>
+                                            {p.presetGroup === "offline" ? `[线下专属] ${p.name}` : p.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5 flex flex-col gap-2">
+                                <span className="ts-13 font-bold text-[var(--c-text-title)]">附加正则组（支持「线下专属」正则）</span>
+                                {regexes.length === 0 ? (
+                                    <span className="ts-11 text-[var(--c-icon)]">暂无可用正则组</span>
+                                ) : (
+                                    <div className="flex flex-col gap-1.5 max-h-[210px] overflow-y-auto">
+                                        {regexes.map(rx => {
+                                            const checked = selectedRegexIds.includes(rx.id);
+                                            return (
+                                                <button
+                                                    key={rx.id}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const next = checked
+                                                            ? selectedRegexIds.filter(id => id !== rx.id)
+                                                            : [...selectedRegexIds, rx.id];
+                                                        update({ regexIds: next });
+                                                    }}
+                                                    className="flex items-center justify-between gap-2 rounded-xl bg-[var(--c-input)] px-3 py-2 text-left"
+                                                >
+                                                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                                                        <span className={`w-4 h-4 rounded flex items-center justify-center border shrink-0 ${checked ? "bg-black border-black text-white" : "border-black/20"}`}>
+                                                            {checked && <Check size={11} />}
+                                                        </span>
+                                                        <span className="ts-12 font-medium text-[var(--c-text-title)] truncate">{rx.name}</span>
+                                                    </div>
+                                                    {rx.regexGroup === "offline" && (
+                                                        <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 text-[10px] font-bold shrink-0">
+                                                            线下专属
+                                                        </span>
+                                                    )}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        </>
+                    )}
+
                     {tab === "wb" && (
                         <>
                             <div className="flex items-center justify-between rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5">

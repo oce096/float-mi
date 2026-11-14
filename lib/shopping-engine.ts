@@ -102,6 +102,10 @@ type ParsedRecommendationBlock = {
 function resolveShoppingApiConfig(): ApiConfig | null {
   const configs = loadApiConfigs();
   const binding = loadBindingConfig();
+  if (binding.secondaryApiConfigId) {
+    const sec = configs.find(config => config.id === binding.secondaryApiConfigId);
+    if (sec) return sec;
+  }
   if (binding.globalDefaults.apiConfigId) {
     return configs.find(config => config.id === binding.globalDefaults.apiConfigId) ?? null;
   }

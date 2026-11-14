@@ -7,6 +7,7 @@ import {
     Check,
     ChevronDown,
     ChevronLeft,
+    Cpu,
     Feather,
     Loader2,
     MapPin,
@@ -37,9 +38,12 @@ import {
     loadBindingConfig,
     saveBindingConfig,
     loadWorldBooks,
+    loadApiConfigs,
+    loadPresets,
+    loadRegexes,
     resolveBinding,
 } from "@/lib/settings-storage";
-import type { WorldBookConfig } from "@/lib/settings-types";
+import type { ApiConfig, PresetConfig, RegexConfig, WorldBookConfig } from "@/lib/settings-types";
 import { getUserIdentityDisplayName, type UserIdentity } from "@/components/settings/user-identity";
 import { getLastChatOfflineTurn, getChatOfflineTurnPreview, loadChatOfflineTurns } from "@/lib/chat-offline-storage";
 import { formatChatUiTime } from "@/lib/chat-time";
@@ -87,7 +91,7 @@ function doesSessionMatchIdentity(session: ChatSession, activeIdentityId?: strin
  * - 自定义叙事文风 + 预设保存/切换
  * - 一键触发线上同款长期记忆总结
  */
-function OfflineStudioDrawer({
+export function OfflineStudioDrawer({
     session,
     character,
     onClose,
@@ -98,9 +102,12 @@ function OfflineStudioDrawer({
     onClose: () => void;
     onToast: (msg: string) => void;
 }) {
-    const [studioTab, setStudioTab] = useState<"worldbook" | "cot" | "style" | "summary">("worldbook");
+    const [studioTab, setStudioTab] = useState<"engine" | "worldbook" | "cot" | "style" | "summary">("engine");
     const [cfg, setCfg] = useState<OfflineSessionStudioConfig>(() => loadOfflineSessionConfig(session.id));
-    const [worldBooks, setWorldBooks] = useState<WorldBookConfig[]>(() => loadWorldBooks());
+    const [apiConfigs] = useState<ApiConfig[]>(() => loadApiConfigs());
+    const [presets] = useState<PresetConfig[]>(() => loadPresets());
+    const [regexes] = useState<RegexConfig[]>(() => loadRegexes());
+    const [worldBooks] = useState<WorldBookConfig[]>(() => loadWorldBooks());
     const [expandedBookIds, setExpandedBookIds] = useState<Set<string>>(() => new Set());
 
     // 思维链预设状态
@@ -199,12 +206,23 @@ function OfflineStudioDrawer({
                 </div>
 
                 {/* 分栏导航 */}
-                <div className="grid grid-cols-4 gap-1.5 px-4 py-2.5 bg-[var(--c-card)]/60 border-b border-black/5">
+                <div className="grid grid-cols-5 gap-1 px-3 py-2.5 bg-[var(--c-card)]/60 border-b border-black/5">
                     {([
+                        {
+                            id: "engine",
+                            label: "模型预设",
+                            icon: Cpu,
+                            activeDot: Boolean(cfg.apiOverride?.enabled || cfg.presetId || (cfg.regexIds && cfg.regexIds.length > 0)),
+                        },
                         { id: "worldbook", label: "世界书", icon: BookOpen, activeDot: Boolean(cfg.useIndependentWorldBooks) },
                         { id: "cot", label: "思维链", icon: Brain, activeDot: Boolean(cfg.cotEnabled) },
                         { id: "style", label: "文风", icon: Feather, activeDot: Boolean(cfg.styleEnabled) },
-                        { id: "summary", label: "记忆总结", icon: Sparkles, activeDot: false },
+                        {
+                            id: "summary",
+                            label: "记忆总结",
+                            icon: Sparkles,
+                            activeDot: cfg.autoSummaryEnabled === false || Boolean(cfg.autoSummaryTurnInterval && cfg.autoSummaryTurnInterval > 0),
+                        },
                     ] as const).map(item => {
                         const Icon = item.icon;
                         const active = studioTab === item.id;
@@ -213,14 +231,14 @@ function OfflineStudioDrawer({
                                 key={item.id}
                                 type="button"
                                 onClick={() => setStudioTab(item.id)}
-                                className={`relative flex flex-col items-center justify-center gap-1 py-2 rounded-xl ts-11 font-semibold transition-all ${
+                                className={`relative flex flex-col items-center justify-center gap-1 py-2 rounded-xl text-[10.5px] font-semibold transition-all ${
                                     active ? "bg-black text-white shadow-sm" : "bg-[var(--c-input)] text-[var(--c-text)] opacity-80"
                                 }`}
                             >
-                                <Icon size={15} />
+                                <Icon size={14} />
                                 <span>{item.label}</span>
                                 {item.activeDot && (
-                                    <span className={`absolute top-1.5 right-2 w-1.5 h-1.5 rounded-full ${active ? "bg-emerald-400" : "bg-emerald-500"}`} />
+                                    <span className={`absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full ${active ? "bg-emerald-400" : "bg-emerald-500"}`} />
                                 )}
                             </button>
                         );
@@ -229,6 +247,179 @@ function OfflineStudioDrawer({
 
                 {/* 主体内容 */}
                 <div className="flex-1 overflow-y-auto px-4 py-3.5 flex flex-col gap-3.5">
+                    {studioTab === "engine" && (
+                        <>
+                            {/* 流式三档调节 */}
+                            <div className="rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5 flex flex-col gap-2">
+                                <span className="ts-13 font-bold text-[var(--c-text-title)]">线下流式输出模式</span>
+                                <div className="grid grid-cols-3 gap-1.5">
+                                    {([
+                                        { id: "auto", label: "智能自适应", desc: "优先流式·自动回退" },
+                                        { id: "stream", label: "强制流式", desc: "逐字实时展开" },
+                                        { id: "non_stream", label: "非流式", desc: "整段生成后返回" },
+                                    ] as const).map(opt => {
+                                        const active = (cfg.streamMode || "auto") === opt.id;
+                                        return (
+                                            <button
+                                                key={opt.id}
+                                                type="button"
+                                                onClick={() => updateCfg({ streamMode: opt.id })}
+                                                className={`rounded-xl px-2 py-2 flex flex-col items-center text-center transition-all border ${
+                                                    active ? "bg-black text-white border-black" : "bg-[var(--c-input)] text-[var(--c-text)] border-transparent"
+                                                }`}
+                                            >
+                                                <span className="ts-12 font-bold">{opt.label}</span>
+                                                <span className={`text-[9.5px] mt-0.5 ${active ? "text-white/75" : "text-[var(--c-icon)]"}`}>{opt.desc}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* 会话级独立 API / 模型覆盖 */}
+                            <div className="rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5 flex flex-col gap-2.5">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex flex-col pr-3">
+                                        <span className="ts-13 font-bold text-[var(--c-text-title)]">本场独立 API / 模型覆盖</span>
+                                        <span className="ts-11 text-[var(--c-icon)]">仅对当前角色线下生效，不改动线上聊天与全局设置</span>
+                                    </div>
+                                    <Toggle
+                                        checked={Boolean(cfg.apiOverride?.enabled)}
+                                        onChange={enabled => updateCfg({
+                                            apiOverride: { ...(cfg.apiOverride || {}), enabled },
+                                        })}
+                                    />
+                                </div>
+
+                                {cfg.apiOverride?.enabled && (
+                                    <div className="flex flex-col gap-2 pt-1 border-t border-black/5">
+                                        <div className="flex flex-col gap-1">
+                                            <span className="ts-11 text-[var(--c-icon)]">引用基底 API 方案（可选）</span>
+                                            <select
+                                                value={cfg.apiOverride?.sourceApiConfigId || ""}
+                                                onChange={e => updateCfg({
+                                                    apiOverride: {
+                                                        ...(cfg.apiOverride || { enabled: true }),
+                                                        sourceApiConfigId: e.target.value || undefined,
+                                                    },
+                                                })}
+                                                className="ui-select ts-12"
+                                            >
+                                                <option value="">— 继承角色默认绑定的 API —</option>
+                                                {apiConfigs.map(ac => (
+                                                    <option key={ac.id} value={ac.id}>
+                                                        {ac.name || ac.provider} ({ac.defaultModel})
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div className="flex flex-col gap-1">
+                                            <span className="ts-11 text-[var(--c-icon)]">单独指定模型名称（留空则沿用基底方案模型）</span>
+                                            <Input
+                                                type="text"
+                                                value={cfg.apiOverride?.model || ""}
+                                                onChange={e => updateCfg({
+                                                    apiOverride: { ...(cfg.apiOverride || { enabled: true }), model: e.target.value },
+                                                })}
+                                                placeholder="例如：claude-3-7-sonnet / deepseek-reasoner"
+                                                className="font-mono ts-12"
+                                            />
+                                        </div>
+
+                                        <div className="flex flex-col gap-1">
+                                            <span className="ts-11 text-[var(--c-icon)]">单独覆盖 Base URL（选填）</span>
+                                            <Input
+                                                type="text"
+                                                value={cfg.apiOverride?.baseUrl ?? ""}
+                                                onChange={e => updateCfg({
+                                                    apiOverride: { ...(cfg.apiOverride || { enabled: true }), baseUrl: e.target.value || undefined },
+                                                })}
+                                                placeholder="留空沿用基底 Base URL"
+                                                className="font-mono ts-12"
+                                            />
+                                        </div>
+
+                                        <div className="flex flex-col gap-1">
+                                            <span className="ts-11 text-[var(--c-icon)]">单独覆盖 API Key（选填）</span>
+                                            <Input
+                                                type="password"
+                                                value={cfg.apiOverride?.apiKey || ""}
+                                                onChange={e => updateCfg({
+                                                    apiOverride: { ...(cfg.apiOverride || { enabled: true }), apiKey: e.target.value },
+                                                })}
+                                                placeholder="留空沿用基底 API Key"
+                                                className="font-mono ts-12"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 线下专属预设选择 */}
+                            <div className="rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5 flex flex-col gap-2">
+                                <div className="flex flex-col">
+                                    <span className="ts-13 font-bold text-[var(--c-text-title)]">线下专用预设（含酒馆导入的线下预设）</span>
+                                    <span className="ts-11 text-[var(--c-icon)]">
+                                        可直接选用「线下专属」分组预设，随包绑定的正则会自动对本场生效，且绝不污染线上
+                                    </span>
+                                </div>
+                                <select
+                                    value={cfg.presetId || ""}
+                                    onChange={e => updateCfg({ presetId: e.target.value || undefined })}
+                                    className="ui-select ts-12"
+                                >
+                                    <option value="">— 跟随角色/全局绑定预设 —</option>
+                                    {presets.map(p => (
+                                        <option key={p.id} value={p.id}>
+                                            {p.presetGroup === "offline" ? `[线下专属] ${p.name}` : p.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* 线下额外正则组勾选 */}
+                            <div className="rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5 flex flex-col gap-2">
+                                <span className="ts-13 font-bold text-[var(--c-text-title)]">本场附加正则组（支持「线下专属」正则）</span>
+                                {regexes.length === 0 ? (
+                                    <span className="ts-11 text-[var(--c-icon)]">暂无可用正则组</span>
+                                ) : (
+                                    <div className="flex flex-col gap-1.5 max-h-[200px] overflow-y-auto">
+                                        {regexes.map(rx => {
+                                            const selectedRxIds = cfg.regexIds || [];
+                                            const checked = selectedRxIds.includes(rx.id);
+                                            return (
+                                                <button
+                                                    key={rx.id}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const next = checked
+                                                            ? selectedRxIds.filter(id => id !== rx.id)
+                                                            : [...selectedRxIds, rx.id];
+                                                        updateCfg({ regexIds: next });
+                                                    }}
+                                                    className="flex items-center justify-between gap-2 rounded-xl bg-[var(--c-input)] px-3 py-2 text-left"
+                                                >
+                                                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                                                        <span className={`w-4 h-4 rounded flex items-center justify-center border shrink-0 ${checked ? "bg-black border-black text-white" : "border-black/20"}`}>
+                                                            {checked && <Check size={11} />}
+                                                        </span>
+                                                        <span className="ts-12 font-medium text-[var(--c-text-title)] truncate">{rx.name}</span>
+                                                    </div>
+                                                    {rx.regexGroup === "offline" && (
+                                                        <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 text-[10px] font-bold shrink-0">
+                                                            线下专属
+                                                        </span>
+                                                    )}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        </>
+                    )}
+
                     {studioTab === "worldbook" && (
                         <>
                             <div className="flex items-center justify-between rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5">
@@ -542,42 +733,77 @@ function OfflineStudioDrawer({
                     )}
 
                     {studioTab === "summary" && (
-                        <div className="rounded-2xl bg-[var(--c-card)] p-4 border border-black/5 flex flex-col gap-3">
-                            <div className="flex flex-col gap-1">
-                                <span className="ts-14 font-bold text-[var(--c-text-title)]">与线上一致的记忆总结机制</span>
-                                <span className="ts-12 text-[var(--c-text)] opacity-80 leading-relaxed">
-                                    1. 线下每轮回复都会自动提取 <code className="px-1 py-0.5 rounded bg-black/5 font-mono">&lt;summary&gt;</code> 事件摘要进入短期记忆流，并同步计入自动总结轮数（满阈值自动调用记忆总结 API 写入长期记忆）。
-                                    <br />
-                                    2. 你也可以在下方手动立即把最新线下与线上事件压缩总结进角色的「记忆库」。
-                                </span>
-                            </div>
-
-                            {summaryResult && (
-                                <div className="rounded-xl bg-[var(--c-input)] px-3 py-2.5 ts-12 text-[var(--c-text-title)]">
-                                    {summaryResult}
+                        <>
+                            <div className="rounded-2xl bg-[var(--c-card)] p-3.5 border border-black/5 flex flex-col gap-3">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex flex-col pr-3">
+                                        <span className="ts-13 font-bold text-[var(--c-text-title)]">线下自动长期记忆总结</span>
+                                        <span className="ts-11 text-[var(--c-icon)]">关闭后本场线下仅记录事件摘要，不自动触发长期记忆总结请求</span>
+                                    </div>
+                                    <Toggle
+                                        checked={cfg.autoSummaryEnabled !== false}
+                                        onChange={enabled => updateCfg({ autoSummaryEnabled: enabled })}
+                                    />
                                 </div>
-                            )}
 
-                            <div className="flex gap-2 pt-1">
-                                <button
-                                    type="button"
-                                    disabled={summarizing}
-                                    onClick={() => void handleRunSummary(false)}
-                                    className="ui-btn ui-btn-primary flex-1 rounded-xl py-2.5 flex items-center justify-center gap-1.5"
-                                >
-                                    {summarizing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
-                                    <span>总结新增事件</span>
-                                </button>
-                                <button
-                                    type="button"
-                                    disabled={summarizing}
-                                    onClick={() => void handleRunSummary(true)}
-                                    className="ui-btn ui-btn-outline flex-1 rounded-xl py-2.5"
-                                >
-                                    全量重新总结
-                                </button>
+                                {cfg.autoSummaryEnabled !== false && (
+                                    <div className="flex items-center justify-between gap-3 pt-2 border-t border-black/5">
+                                        <div className="flex flex-col">
+                                            <span className="ts-12 font-bold text-[var(--c-text-title)]">自定义自动总结轮数间隔</span>
+                                            <span className="ts-10 text-[var(--c-icon)]">填 0 表示跟随系统记忆库默认阈值；填 N 表示每满 N 幕线下自动总结一次</span>
+                                        </div>
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            max={100}
+                                            value={cfg.autoSummaryTurnInterval ?? 0}
+                                            onChange={e => {
+                                                const val = Math.max(0, Math.min(100, Math.floor(Number(e.target.value) || 0)));
+                                                updateCfg({ autoSummaryTurnInterval: val || undefined });
+                                            }}
+                                            className="w-16 rounded-xl bg-[var(--c-input)] px-2.5 py-1.5 text-center font-mono ts-13 font-bold text-[var(--c-text-title)] outline-none"
+                                        />
+                                    </div>
+                                )}
                             </div>
-                        </div>
+
+                            <div className="rounded-2xl bg-[var(--c-card)] p-4 border border-black/5 flex flex-col gap-3">
+                                <div className="flex flex-col gap-1">
+                                    <span className="ts-14 font-bold text-[var(--c-text-title)]">手动立即压缩总结</span>
+                                    <span className="ts-12 text-[var(--c-text)] opacity-80 leading-relaxed">
+                                        1. 线下每轮回复都会自动提取 <code className="px-1 py-0.5 rounded bg-black/5 font-mono">&lt;summary&gt;</code> 事件摘要进入短期记忆流。
+                                        <br />
+                                        2. 你也可以随时点击下方按钮，立即把最新线下与线上事件压缩总结进角色的「长期记忆库」。
+                                    </span>
+                                </div>
+
+                                {summaryResult && (
+                                    <div className="rounded-xl bg-[var(--c-input)] px-3 py-2.5 ts-12 text-[var(--c-text-title)]">
+                                        {summaryResult}
+                                    </div>
+                                )}
+
+                                <div className="flex gap-2 pt-1">
+                                    <button
+                                        type="button"
+                                        disabled={summarizing}
+                                        onClick={() => void handleRunSummary(false)}
+                                        className="ui-btn ui-btn-primary flex-1 rounded-xl py-2.5 flex items-center justify-center gap-1.5"
+                                    >
+                                        {summarizing ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                                        <span>总结新增事件</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={summarizing}
+                                        onClick={() => void handleRunSummary(true)}
+                                        className="ui-btn ui-btn-outline flex-1 rounded-xl py-2.5"
+                                    >
+                                        全量重新总结
+                                    </button>
+                                </div>
+                            </div>
+                        </>
                     )}
                 </div>
             </div>
@@ -650,6 +876,9 @@ export function OfflineChatApp({ onClose }: { onClose: () => void }) {
         if (!activeSession) return { activeCount: 0 };
         const cfg = loadOfflineSessionConfig(activeSession.id);
         let activeCount = 0;
+        if (cfg.apiOverride?.enabled) activeCount += 1;
+        if (cfg.presetId) activeCount += 1;
+        if (cfg.regexIds && cfg.regexIds.length > 0) activeCount += 1;
         if (cfg.useIndependentWorldBooks) activeCount += 1;
         if (cfg.cotEnabled) activeCount += 1;
         if (cfg.styleEnabled) activeCount += 1;

@@ -799,6 +799,10 @@ function prependXiaohongshuUserIdentityHint(context: string, hint: string): stri
 function resolveGlobalApiConfig(): ApiConfig | null {
   const configs = loadApiConfigs();
   const binding = loadBindingConfig();
+  if (binding.secondaryApiConfigId) {
+    const secondary = configs.find(config => config.id === binding.secondaryApiConfigId);
+    if (secondary) return secondary;
+  }
   if (binding.globalDefaults.apiConfigId) {
     return configs.find(config => config.id === binding.globalDefaults.apiConfigId) ?? null;
   }
@@ -1069,14 +1073,15 @@ async function resolveCharacterAssemblerInput(
   const apiConfig = activeSlot.apiConfigId
     ? loadApiConfigs().find(config => config.id === activeSlot.apiConfigId) ?? null
     : null;
-  const presets = loadPresets();
+  const presets = loadPresets().filter(p => p.presetGroup !== "offline");
   let preset = activeSlot.presetId ? presets.find(item => item.id === activeSlot.presetId) ?? null : null;
   if (!preset) preset = presets.find(item => item.builtIn) ?? null;
   const worldBooks = (activeSlot.worldBookIds || [])
     .map(id => loadWorldBooks().find(book => book.id === id))
     .filter(Boolean) as ReturnType<typeof loadWorldBooks>;
+  const allOnlineRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
   const regexes = (activeSlot.regexIds || [])
-    .map(id => loadRegexes().find(regex => regex.id === id))
+    .map(id => allOnlineRegexes.find(regex => regex.id === id))
     .filter(Boolean) as RegexConfig[];
   const userIdentity = resolveUserIdentity(characterId, "chat");
   const prepared = prepareShortTermContext(characterId, "xiaohongshu");

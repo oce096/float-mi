@@ -197,8 +197,8 @@ async function resolveAssemblerInput(
         apiConfig = apiConfigs.find(c => c.id === activeSlot.apiConfigId) ?? null;
     }
 
-    // 3. Load preset (fallback to built-in)
-    const presets = loadPresets();
+    // 3. Load preset (fallback to built-in; filter out offline-only presets)
+    const presets = loadPresets().filter(p => p.presetGroup !== "offline");
     let preset = activeSlot.presetId ? presets.find(p => p.id === activeSlot.presetId) ?? null : null;
     if (!preset) preset = presets.find(p => p.builtIn) ?? null;
 
@@ -208,8 +208,8 @@ async function resolveAssemblerInput(
         .map(id => allWorldBooks.find(w => w.id === id))
         .filter(Boolean) as typeof allWorldBooks;
 
-    // 5. Load regexes
-    const allRegexes = loadRegexes();
+    // 5. Load regexes (filter out offline-only regexes)
+    const allRegexes = loadRegexes().filter(r => r.regexGroup !== "offline");
     const regexes = (activeSlot.regexIds || [])
         .map(id => allRegexes.find(r => r.id === id))
         .filter(Boolean) as typeof allRegexes;

@@ -51,6 +51,9 @@ import {
     loadRegexes,
     resolveUserIdentity,
     applyWorldBookEntryOverrides,
+    isOfflinePresetScopeAllowed,
+    filterPresetsForScope,
+    filterRegexesForScope,
 } from "./settings-storage";
 import {
     assembleGroupPromptPayload,
@@ -83,7 +86,12 @@ import { buildProviderRequest, nativeToolProtocolForConfig, toLlmRequestMessages
 import type { DebugPromptSnapshot } from "./debug-store";
 import { throwIfAborted } from "./abort-utils";
 import { buildCharacterTimeContext, buildGroupTimeContext } from "./character-time";
-import { buildOfflineStudioSystemPrompt, resolveOfflineStudioWorldBooks } from "./offline-studio-storage";
+import {
+    buildOfflineStudioSystemPrompt,
+    loadOfflineSessionConfig,
+    resolveOfflineEffectiveApiConfig,
+    resolveOfflineStudioWorldBooks,
+} from "./offline-studio-storage";
 import { getPromptTimestampOptionsForTimeContext } from "./prompt-time";
 
 function stripGroupFinancialActionsForMetadataRepair(text: string): string {
@@ -299,27 +307,42 @@ async function buildGroupChatPromptMessages(
     const charMap = new Map(chars.map(c => [c.id, c]));
     const participantIds = session.participantIds || [];
 
+    const baseTags = options?.appTags ?? ["group_chat", "text"];
     const bindings = loadBindingConfig();
-    const activeSlot = resolveBinding(bindings, undefined, "group_chat");
+    const activeSlot = resolveBinding(bindings, undefined, baseTags.includes("offline") ? "offline_chat" : "group_chat");
+
+    const allowOfflineScope = isOfflinePresetScopeAllowed("group_chat", baseTags);
+    const offlineStudioCfg = baseTags.includes("offline") ? loadOfflineSessionConfig(session.id) : null;
 
     const apiConfigs = loadApiConfigs();
     const boundConfigId = options?.apiConfigId || activeSlot.apiConfigId;
     if (!boundConfigId) throw new ChatEngineError("No API Configuration bound for group chat.");
-    const config = apiConfigs.find(c => c.id === boundConfigId);
-    if (!config) throw new ChatEngineError("API Configuration not found for group chat.");
+    const baseConfig = apiConfigs.find(c => c.id === boundConfigId);
+    if (!baseConfig) throw new ChatEngineError("API Configuration not found for group chat.");
+    const config = offlineStudioCfg
+        ? resolveOfflineEffectiveApiConfig(baseConfig, offlineStudioCfg.apiOverride, apiConfigs)
+        : baseConfig;
 
-    const presets = loadPresets();
-    let preset = activeSlot.presetId ? presets.find(p => p.id === activeSlot.presetId) || null : null;
+    const presets = filterPresetsForScope(loadPresets(), allowOfflineScope);
+    const preferredPresetId = (offlineStudioCfg?.presetId && allowOfflineScope)
+        ? offlineStudioCfg.presetId
+        : activeSlot.presetId;
+    let preset = preferredPresetId ? presets.find(p => p.id === preferredPresetId) || null : null;
     if (!preset) preset = presets.find(p => p.builtIn) ?? null;
     const promptProfile = options?.promptProfile ?? undefined;
     if (preset && promptProfile) {
         preset = applyCustomPromptProfileToPreset(preset, promptProfile);
     }
 
-    const allRegexes = loadRegexes();
+    const allRegexes = filterRegexesForScope(loadRegexes(), allowOfflineScope);
+    const mergedRegexIds = Array.from(new Set([
+        ...(activeSlot.regexIds || []),
+        ...(allowOfflineScope && offlineStudioCfg?.regexIds ? offlineStudioCfg.regexIds : []),
+        ...(allowOfflineScope && preset?.boundRegexGroupIds ? preset.boundRegexGroupIds : []),
+    ]));
     const regexes = promptProfile?.enableRegexes === false
         ? []
-        : (activeSlot.regexIds || []).map(id => allRegexes.find(r => r.id === id)).filter(Boolean) as typeof allRegexes;
+        : mergedRegexIds.map(id => allRegexes.find(r => r.id === id)).filter(Boolean) as typeof allRegexes;
 
     const userIdentity = resolveUserIdentity(
         session.participantIds?.[0],
@@ -1174,8 +1197,12 @@ export async function generateGroupOfflineChatCompletion(
         signal: options?.signal,
         onReasoning: (t: string) => { reasoning = t; },
     };
+    const studioCfg = loadOfflineSessionConfig(session.id);
+    const streamMode = studioCfg.streamMode
+        ?? (session.streamOffline === true ? "stream" : session.streamOffline === false ? "non_stream" : "auto");
+
     let rawOutput: string;
-    if (isSessionStreamingEnabled(session, false) && options?.onStreamDelta) {
+    if (streamMode === "stream" && options?.onStreamDelta) {
         const streamResult = await sendLLMStreamRequest(config, preset, llmMessages, regexes, meta, {
             appId: "group_chat",
             appTags: ["group_chat", "offline"],
@@ -1186,6 +1213,23 @@ export async function generateGroupOfflineChatCompletion(
             onReasoningDelta: (t) => { reasoning += t; },
         });
         rawOutput = streamResult.content;
+    } else if (streamMode === "auto" && options?.onStreamDelta) {
+        let receivedAny = false;
+        try {
+            const streamResult = await sendLLMStreamRequest(config, preset, llmMessages, regexes, meta, {
+                appId: "group_chat",
+                appTags: ["group_chat", "offline"],
+                debugSessionId: session.id,
+                signal: options?.signal,
+            }, {
+                onDelta: (text) => { receivedAny = true; options.onStreamDelta?.(text); },
+                onReasoningDelta: (t) => { receivedAny = true; reasoning += t; },
+            });
+            rawOutput = streamResult.content;
+        } catch (err) {
+            if (receivedAny || options?.signal?.aborted) throw err;
+            rawOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, requestOptions);
+        }
     } else {
         rawOutput = await sendLLMRequest(config, preset, llmMessages, regexes, meta, requestOptions);
     }
