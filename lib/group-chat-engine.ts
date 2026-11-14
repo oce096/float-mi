@@ -83,6 +83,7 @@ import { buildProviderRequest, nativeToolProtocolForConfig, toLlmRequestMessages
 import type { DebugPromptSnapshot } from "./debug-store";
 import { throwIfAborted } from "./abort-utils";
 import { buildCharacterTimeContext, buildGroupTimeContext } from "./character-time";
+import { buildOfflineStudioSystemPrompt, resolveOfflineStudioWorldBooks } from "./offline-studio-storage";
 import { getPromptTimestampOptionsForTimeContext } from "./prompt-time";
 
 function stripGroupFinancialActionsForMetadataRepair(text: string): string {
@@ -347,10 +348,13 @@ async function buildGroupChatPromptMessages(
         const scheduleSummary = buildCalendarScheduleMarker("character", charId, getWeekStartIso(now));
         const currentSchedule = getCurrentCalendarScheduleForPrompt("character", charId, now);
         const charSlot = resolveBinding(bindings, charId, "group_chat");
+        const independentOfflineWbs = isOfflineMode && promptProfile?.enableWorldBooks !== false
+            ? resolveOfflineStudioWorldBooks(session.id, allWorldBooks)
+            : null;
         const rawWorldBooks = promptProfile?.enableWorldBooks === false
             ? []
             : (charSlot.worldBookIds || []).map(id => allWorldBooks.find(w => w.id === id)).filter(Boolean) as typeof allWorldBooks;
-        const worldBooks = applyWorldBookEntryOverrides(rawWorldBooks, charId);
+        const worldBooks = independentOfflineWbs ?? applyWorldBookEntryOverrides(rawWorldBooks, charId);
         const { wbActivationContext } = prepareShortTermContext(charId, "group_chat", {
             userName,
             excludeGroupSessionId: isOfflineMode ? undefined : session.id,
@@ -1151,9 +1155,16 @@ export async function generateGroupOfflineChatCompletion(
             disableTools: true,
         },
     );
+    const studioPrompt = buildOfflineStudioSystemPrompt(session.id);
+    if (studioPrompt.systemInstruction) {
+        llmMessages.push({
+            role: "system",
+            content: studioPrompt.systemInstruction,
+        });
+    }
     const summaryTag = preset?.story_summary_tag?.trim() || "summary";
-    const thinkingTag = preset?.thinking_tag?.trim() || "thinking";
-    const offlineTagEnabled = preset?.offline_thinking_enabled === true;
+    const thinkingTag = studioPrompt.forceThinkingTag || preset?.thinking_tag?.trim() || "thinking";
+    const offlineTagEnabled = Boolean(studioPrompt.forceThinkingTag) || preset?.offline_thinking_enabled === true;
     let reasoning = "";
     const meta = { characterName: `群聊:${session.groupName || "群聊"}` };
     const requestOptions = {
@@ -1221,6 +1232,13 @@ export async function generateGroupOfflineChatCompletion(
             break;
         }
     }
+
+    scheduleGroupMemorySummarization(
+        session.participantIds || [],
+        loadCharacters(),
+        history,
+        parsed.summary.trim() ? 1 : 0,
+    );
 
     return {
         ...parsed,

@@ -27,6 +27,7 @@ import {
   loadCharacterWorldGroups,
   moveCharacterToWorld,
   renameCharacterWorldGroup,
+  reorderCharacterWorldGroups,
   updateCharacterWorldDescription,
   CHARACTER_WORLDS_UPDATED_EVENT,
   DEFAULT_CHARACTER_WORLD_ID,
@@ -1129,7 +1130,7 @@ function CharListView({
           </div>
         }
       >
-      {/* 世界卷宗标签条：每个世界一份案卷、一张画布 */}
+      {/* 世界卷宗标签条：每个世界一份案卷、一张画布（支持长按拖动调整先后顺序） */}
       <WorldTabStrip
         groups={worldGroups}
         currentWorldId={currentWorldId}
@@ -1138,6 +1139,10 @@ function CharListView({
         onSelect={selectWorld}
         onOpenEditor={() => setShowWorldEditor(true)}
         onOpenCreate={() => setShowNewWorld(true)}
+        onReorder={(fromId, toId) => {
+          reorderCharacterWorldGroups(fromId, toId);
+          onNotice("已调整世界观顺序");
+        }}
       />
       <div
         ref={canvasElRef}

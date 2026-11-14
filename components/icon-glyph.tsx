@@ -41,6 +41,7 @@ import {
   mdiGlassCocktail,
   mdiStorefrontOutline,
   mdiCoffeeOutline,
+  mdiBookshelf,
 } from "@mdi/js";
 
 type IconGlyphProps = {
@@ -79,6 +80,7 @@ const MDI_PATHS: Record<IconId, string> = {
   dwelling: mdiHome,
   realitybridge: mdiBridge,
   offline_chat: mdiCoffeeOutline,
+  spinoff: mdiBookshelf,
 };
 
 export function IconGlyph({ id, className }: IconGlyphProps) {

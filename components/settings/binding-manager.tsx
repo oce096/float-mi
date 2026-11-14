@@ -974,42 +974,45 @@ export function BindingManager() {
                                         .filter((c): c is Character => Boolean(c));
                                     if (groupChars.length === 0) return null;
                                     return (
-                                        <div key={group.id} className="flex flex-col gap-1 w-full">
+                                        <div key={group.id} className="flex flex-col gap-1.5 w-full">
                                             {worldGroups.length > 1 && selectedWorldGroupId === "all" && (
-                                                <div className="px-2 pt-2 pb-0.5 ts-11 font-semibold text-[var(--c-icon)]">
-                                                    {group.name} · {groupChars.length}
+                                                <div className="px-1.5 pt-2 pb-0.5 ts-11 font-semibold text-[var(--c-icon)] flex items-center justify-between">
+                                                    <span>📁 {group.name}</span>
+                                                    <span>{groupChars.length} 人</span>
                                                 </div>
                                             )}
-                                            {groupChars.map(char => {
-                                                const configured = hasCharacterBinding(char.id);
-                                                const name = char.name || "未命名角色";
-                                                const worldLabel = charWorldNameMap.get(char.id);
-                                                return (
-                                                    <button
-                                                        key={char.id}
-                                                        type="button"
-                                                        className="chat-contact-item binding-contact-item"
-                                                        onClick={() => openCharacterBinding(char.id)}
-                                                    >
-                                                        <span className="chat-contact-avatar">
-                                                            {char.avatar ? (
-                                                                <img src={char.avatar} alt="" />
-                                                            ) : (
-                                                                <span className="chat-contact-avatar-fallback">
-                                                                    {name.charAt(0)}
-                                                                </span>
-                                                            )}
-                                                        </span>
-                                                        <span className="flex flex-col items-start min-w-0 flex-1 text-left">
-                                                            <span className="chat-contact-name truncate w-full">{name}</span>
-                                                            {worldLabel && (
-                                                                <span className="ts-11 text-[var(--c-icon)] truncate w-full">{worldLabel}</span>
-                                                            )}
-                                                        </span>
-                                                        {configured && <span className="binding-contact-badge" aria-label="已配置" />}
-                                                    </button>
-                                                );
-                                            })}
+                                            <div className="grid grid-cols-2 gap-2 w-full">
+                                                {groupChars.map(char => {
+                                                    const configured = hasCharacterBinding(char.id);
+                                                    const name = char.name || "未命名角色";
+                                                    const worldLabel = charWorldNameMap.get(char.id);
+                                                    return (
+                                                        <button
+                                                            key={char.id}
+                                                            type="button"
+                                                            className="relative flex items-center gap-2.5 p-2 rounded-xl bg-[var(--c-input)] hover:bg-black/5 active:scale-[0.98] transition-all min-w-0 text-left"
+                                                            onClick={() => openCharacterBinding(char.id)}
+                                                        >
+                                                            <span className="w-9 h-9 rounded-full overflow-hidden bg-[var(--c-card)] shrink-0 flex items-center justify-center border border-black/5">
+                                                                {char.avatar ? (
+                                                                    <img src={char.avatar} alt="" className="w-full h-full object-cover" />
+                                                                ) : (
+                                                                    <span className="ts-13 font-bold text-[var(--c-text-title)]">
+                                                                        {name.charAt(0)}
+                                                                    </span>
+                                                                )}
+                                                            </span>
+                                                            <span className="flex flex-col items-start min-w-0 flex-1">
+                                                                <span className="ts-13 font-semibold text-[var(--c-text-title)] truncate w-full">{name}</span>
+                                                                {worldLabel && (
+                                                                    <span className="ts-10 text-[var(--c-icon)] truncate w-full">{worldLabel}</span>
+                                                                )}
+                                                            </span>
+                                                            {configured && <span className="binding-contact-badge shrink-0" aria-label="已配置" />}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
                                     );
                                 })}
